@@ -2,12 +2,15 @@ package config
 
 import (
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/RefireLab/gh-runnerd/internal/layout"
+	"github.com/RefireLab/gh-runnerd/internal/netbridge"
 	"github.com/RefireLab/gh-runnerd/internal/units"
 	"github.com/pelletier/go-toml/v2"
 )
@@ -128,7 +131,9 @@ func Defaults() Config {
 			BootTimeout: duration{90 * time.Second},
 		},
 		Registry: RegistryConfig{
-			Listen:      "10.87.0.1:443",
+			// Listen is derived from network.host_ip and the default local
+			// port when empty; see RegistryListen.
+			Listen:      "",
 			PinnedQuota: "50G",
 			CacheQuota:  "50G",
 		},
@@ -225,6 +230,17 @@ func (c Config) Validate() error {
 	if scope != "repo" && scope != "org" {
 		return fmt.Errorf("github.scope must be repo or org")
 	}
+	hostIP := net.ParseIP(c.Network.HostIP)
+	if hostIP == nil || hostIP.To4() == nil {
+		return fmt.Errorf("network.host_ip %q is not an IPv4 address", c.Network.HostIP)
+	}
+	_, ipnet, err := net.ParseCIDR(c.Network.CIDR)
+	if err != nil {
+		return fmt.Errorf("network.cidr: %w", err)
+	}
+	if !ipnet.Contains(hostIP) {
+		return fmt.Errorf("network.host_ip %s is outside network.cidr %s", c.Network.HostIP, c.Network.CIDR)
+	}
 	if c.VM.Template != "ubuntu-24.04" && !strings.HasPrefix(c.VM.Template, "ubuntu-24.04") {
 		// Custom names are allowed once imported; the shipped template is ubuntu-24.04.
 	}
@@ -246,6 +262,30 @@ func (c Config) MemoryMB() int {
 func (c Config) DiskGB() int {
 	n, _ := units.ParseGB(c.VM.Disk)
 	return n
+}
+
+// RegistryListen returns the embedded registry bind address. When
+// registry.listen is empty it derives <network.host_ip>:42443 — a high
+// port so the host's real 443 (web servers, docker-proxy) is never
+// claimed; VMs still dial 443 via an iptables redirect on the bridge.
+func (c Config) RegistryListen() string {
+	if strings.TrimSpace(c.Registry.Listen) != "" {
+		return c.Registry.Listen
+	}
+	return net.JoinHostPort(c.Network.HostIP, strconv.Itoa(netbridge.DefaultRegistryLocalPort))
+}
+
+// RegistryLocalPort returns the TCP port of RegistryListen.
+func (c Config) RegistryLocalPort() int {
+	_, portStr, err := net.SplitHostPort(c.RegistryListen())
+	if err != nil {
+		return netbridge.DefaultRegistryLocalPort
+	}
+	p, err := strconv.Atoi(portStr)
+	if err != nil {
+		return netbridge.DefaultRegistryLocalPort
+	}
+	return p
 }
 
 // PinnedQuotaBytes returns the pinned image quota.

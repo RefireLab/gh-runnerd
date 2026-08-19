@@ -26,6 +26,7 @@ type Options struct {
 	RunnerVersion string // GitHub Actions runner release
 	GuestBinary   string // explicit path to gh-runnerd-guest
 	CACertPEM     []byte // host CA baked into the VM trust store
+	HostIP        string // bridge address VMs dial (default 10.87.0.1)
 	OutPath       string // destination compressed qcow2 (required)
 	CacheDir      string // where downloaded cloud images are kept
 	WorkDir       string // scratch dir; default: os.MkdirTemp
@@ -119,6 +120,9 @@ func withDefaults(o Options) Options {
 	}
 	if o.CacheDir == "" {
 		o.CacheDir = filepath.Join(os.TempDir(), "gh-runnerd-bake-cache")
+	}
+	if o.HostIP == "" {
+		o.HostIP = "10.87.0.1"
 	}
 	return o
 }
@@ -247,6 +251,9 @@ func writeSeed(seedDir, guest string, o Options) error {
 		if err != nil {
 			return fmt.Errorf("embedded asset %s: %w", src, err)
 		}
+		// The guest /etc/hosts entry and the agent's GH_RUNNERD_HOST must
+		// point at the configured bridge address, not the default.
+		raw = []byte(strings.ReplaceAll(string(raw), "10.87.0.1", o.HostIP))
 		if err := os.WriteFile(filepath.Join(seedDir, dst), raw, 0o644); err != nil {
 			return err
 		}

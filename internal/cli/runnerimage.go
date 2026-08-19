@@ -81,6 +81,7 @@ func bakeAndInstall(ctx context.Context, cfg config.Config, out io.Writer, o bak
 		RunnerVersion: o.RunnerVersion,
 		GuestBinary:   o.Guest,
 		CACertPEM:     caPEM,
+		HostIP:        cfg.Network.HostIP,
 		OutPath:       tmpOut,
 		CacheDir:      filepath.Join(dirs.Cache, "bake"),
 		DiskGB:        cfg.DiskGB(),
