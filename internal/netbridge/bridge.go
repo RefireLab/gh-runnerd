@@ -38,7 +38,7 @@ func SetupCommands(c Config) [][]string {
 	c = c.withDefaults()
 	return [][]string{
 		{"ip", "link", "add", c.Bridge, "type", "bridge"},
-		{"ip", "addr", "add", c.HostIP + "/16", "dev", c.Bridge},
+		{"ip", "addr", "replace", c.HostIP + "/16", "dev", c.Bridge},
 		{"ip", "link", "set", c.Bridge, "up"},
 		{"iptables", "-t", "nat", "-C", "POSTROUTING", "-s", c.CIDR, "!", "-d", c.CIDR, "-j", "MASQUERADE"},
 		{"iptables", "-C", "FORWARD", "-i", c.Bridge, "-o", c.Bridge, "-j", "DROP"},
@@ -72,7 +72,10 @@ func Setup(c Config) error {
 	if err := runIgnore([]string{"ip", "link", "add", c.Bridge, "type", "bridge"}, "exists", "File exists"); err != nil {
 		return err
 	}
-	if err := runIgnore([]string{"ip", "addr", "add", c.HostIP + "/16", "dev", c.Bridge}, "exists", "File exists"); err != nil {
+	// `ip addr replace` is idempotent; `add` fails on restart because the
+	// bridge (and its address) survives daemon exits, and newer iproute2
+	// reports "Address already assigned" instead of "File exists".
+	if err := run([]string{"ip", "addr", "replace", c.HostIP + "/16", "dev", c.Bridge}); err != nil {
 		return err
 	}
 	if err := run([]string{"ip", "link", "set", c.Bridge, "up"}); err != nil {
