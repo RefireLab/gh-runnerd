@@ -31,23 +31,25 @@ ls -l /dev/kvm   # must exist
 
 ### 2. Binary
 
-There is no GitHub Release yet. From a clone:
+Grab the tar.gz for your architecture from [Releases](https://github.com/RefireLab/gh-runnerd/releases):
 
 ```bash
-git clone https://github.com/RefireLab/gh-runnerd
-cd gh-runnerd
-git checkout cursor/gh-runnerd-full-product-5da9   # until this is merged to main
-make build
-sudo install -m 0755 bin/gh-runnerd bin/gh-runnerd-guest /usr/local/bin/
+VERSION=0.1.0
+ARCH=amd64        # x86_64 servers/PCs; use arm64 for Ampere/Raspberry/Graviton
+curl -fL -o gh-runnerd.tar.gz \
+  "https://github.com/RefireLab/gh-runnerd/releases/download/v${VERSION}/gh-runnerd_${VERSION}_linux_${ARCH}.tar.gz"
+tar -xzf gh-runnerd.tar.gz
+sudo install -m 0755 gh-runnerd gh-runnerd-guest /usr/local/bin/
+gh-runnerd --version
 ```
 
-After the first `v*` tag:
+One-liner that picks the arch and the latest release automatically:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/RefireLab/gh-runnerd/main/scripts/install-binary.sh | sudo bash
 ```
 
-CI also uploads `gh-runnerd-linux-amd64` / `arm64` as Actions artifacts on every push.
+Or build from source (`git clone` → `make build` → `sudo install -m 0755 bin/gh-runnerd bin/gh-runnerd-guest /usr/local/bin/`).
 
 ### 3. GitHub token
 

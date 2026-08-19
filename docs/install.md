@@ -32,14 +32,24 @@ If the node is a VM itself, enable nested virtualization in the hypervisor **or*
 
 The daemon is two static Linux binaries: `gh-runnerd` (host) and `gh-runnerd-guest` (baked into the VM). They do **not** replace QEMU/KVM or the Ubuntu qcow2.
 
-Until a GitHub Release exists (`v*` tag):
+Install from [GitHub Releases](https://github.com/RefireLab/gh-runnerd/releases):
 
 ```bash
-make build
-sudo install -m 0755 bin/gh-runnerd bin/gh-runnerd-guest /usr/local/bin/
+VERSION=0.1.0
+ARCH=amd64   # or arm64
+curl -fL -o gh-runnerd.tar.gz \
+  "https://github.com/RefireLab/gh-runnerd/releases/download/v${VERSION}/gh-runnerd_${VERSION}_linux_${ARCH}.tar.gz"
+tar -xzf gh-runnerd.tar.gz
+sudo install -m 0755 gh-runnerd gh-runnerd-guest /usr/local/bin/
 ```
 
-CI uploads `dist/gh-runnerd-linux-amd64` (and arm64) as workflow artifacts. After the first release:
+Each archive contains `gh-runnerd`, `gh-runnerd-guest`, `LICENSE`, and `README.md`. Verify downloads against `gh-runnerd_${VERSION}_checksums.txt` from the same release:
+
+```bash
+sha256sum -c --ignore-missing gh-runnerd_${VERSION}_checksums.txt
+```
+
+Or use the helper that detects the arch and latest release:
 
 ```bash
 sudo ./scripts/install-binary.sh
@@ -50,6 +60,21 @@ sudo ./scripts/install-binary.sh
 ```bash
 make build
 sudo install -m 0755 bin/gh-runnerd bin/gh-runnerd-guest /usr/local/bin/
+```
+
+## Releasing (maintainers)
+
+Releases are tag-driven and built by GoReleaser in CI ([.github/workflows/release.yml](../.github/workflows/release.yml), config in [.goreleaser.yaml](../.goreleaser.yaml)):
+
+```bash
+git tag v0.1.0
+git push origin v0.1.0
+```
+
+The workflow cross-compiles linux amd64/arm64, packs `gh-runnerd_<version>_linux_<arch>.tar.gz`, generates the checksums file and changelog, and publishes the GitHub Release. Dry-run locally without publishing:
+
+```bash
+goreleaser release --snapshot --clean
 ```
 
 ## Debian package
