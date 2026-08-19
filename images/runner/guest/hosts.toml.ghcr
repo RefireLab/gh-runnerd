@@ -1,0 +1,4 @@
+server = "https://ghcr.io"
+
+[host."https://ghcr.gh-runnerd.local"]
+  capabilities = ["pull", "resolve"]

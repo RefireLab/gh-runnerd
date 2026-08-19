@@ -1,0 +1,4 @@
+server = "https://quay.io"
+
+[host."https://quay.gh-runnerd.local"]
+  capabilities = ["pull", "resolve"]

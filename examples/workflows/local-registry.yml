@@ -1,0 +1,10 @@
+name: local-registry
+on: [push]
+jobs:
+  build:
+    runs-on: gh-runnerd
+    container:
+      image: gh-runnerd.local/my-ci:2026.08
+    steps:
+      - uses: actions/checkout@v4
+      - run: ./build.sh

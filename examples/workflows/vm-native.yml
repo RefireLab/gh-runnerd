@@ -1,0 +1,12 @@
+name: vm-native
+on: [push]
+jobs:
+  test:
+    runs-on: gh-runnerd
+    steps:
+      - uses: actions/checkout@v4
+      - run: |
+          set -euo pipefail
+          uname -a
+          git --version
+          docker --version
