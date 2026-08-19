@@ -453,6 +453,10 @@ func exampleOwner(login string) string {
 
 func shortErr(err error) string {
 	s := err.Error()
+	// Drop raw JSON bodies from API errors; the status line is enough here.
+	if idx := strings.Index(s, ": {"); idx > 0 {
+		s = s[:idx]
+	}
 	if len(s) > 160 {
 		s = s[:160] + "..."
 	}

@@ -23,7 +23,8 @@ sudo ./gh-runnerd init
 ```
 
 > No `gh` CLI? Once the repo is public you can use plain curl:
-> `curl -fL https://github.com/RefireLab/gh-runnerd/releases/latest/download/gh-runnerd_0.2.0_linux_amd64.tar.gz | tar -xz`
+> `curl -fsSL https://raw.githubusercontent.com/RefireLab/gh-runnerd/main/scripts/install-binary.sh | sudo bash`
+> (installs the binaries into `/usr/local/bin`, then run `sudo gh-runnerd init`)
 
 That's it. `init` is a wizard that walks you through everything:
 
