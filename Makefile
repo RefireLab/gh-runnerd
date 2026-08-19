@@ -4,7 +4,7 @@ VERSION   ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo de
 LDFLAGS   := -X github.com/RefireLab/gh-runnerd/internal/version.Version=$(VERSION)
 GOFLAGS   ?=
 
-.PHONY: all build test vet fmt tidy ci guest runner-image deb clean
+.PHONY: all build test vet fmt tidy ci guest runner-image deb dist clean
 
 all: build
 
@@ -30,6 +30,17 @@ tidy:
 
 ci: vet test build
 
+dist:
+	@mkdir -p dist
+	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 $(GO) build $(GOFLAGS) -ldflags '$(LDFLAGS)' \
+		-o dist/gh-runnerd-linux-amd64 ./cmd/gh-runnerd
+	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 $(GO) build $(GOFLAGS) -ldflags '$(LDFLAGS)' \
+		-o dist/gh-runnerd-guest-linux-amd64 ./cmd/gh-runnerd-guest
+	CGO_ENABLED=0 GOOS=linux GOARCH=arm64 $(GO) build $(GOFLAGS) -ldflags '$(LDFLAGS)' \
+		-o dist/gh-runnerd-linux-arm64 ./cmd/gh-runnerd
+	CGO_ENABLED=0 GOOS=linux GOARCH=arm64 $(GO) build $(GOFLAGS) -ldflags '$(LDFLAGS)' \
+		-o dist/gh-runnerd-guest-linux-arm64 ./cmd/gh-runnerd-guest
+
 runner-image: guest
 	./images/runner/bake.sh
 
@@ -37,4 +48,4 @@ deb: build
 	./packaging/deb/build.sh
 
 clean:
-	rm -rf $(GOBIN) /tmp/gh-runnerd-deb-root
+	rm -rf $(GOBIN) dist /tmp/gh-runnerd-deb-root

@@ -15,26 +15,89 @@ Ubuntu host
 
 gh-runnerd does **not** reimplement GitHub's job container runtime. The official runner inside the VM runs `docker pull`, job containers, sibling container actions, and `services:`.
 
-## Five minutes to a green check
+## New Ubuntu host → first job
 
-Host: Ubuntu 24.04+ with KVM.
+Host must be **Ubuntu 24.04+** with `/dev/kvm`. The Go binary is not enough: QEMU still runs the disposable VMs, and you bake the Ubuntu runner disk **once**.
+
+### 1. Packages
 
 ```bash
-sudo apt install -y qemu-system-x86 qemu-utils qemu-guest-agent iptables cloud-image-utils curl git make golang-go genisoimage
+sudo apt update
+sudo apt install -y qemu-system-x86 qemu-utils qemu-guest-agent iptables \
+  cloud-image-utils curl git make golang-go ca-certificates
+# ARM Ubuntu: qemu-system-arm instead of qemu-system-x86
+ls -l /dev/kvm   # must exist
+```
+
+### 2. Binary
+
+There is no GitHub Release yet. From a clone:
+
+```bash
 git clone https://github.com/RefireLab/gh-runnerd
 cd gh-runnerd
+git checkout cursor/gh-runnerd-full-product-5da9   # until this is merged to main
 make build
+sudo install -m 0755 bin/gh-runnerd bin/gh-runnerd-guest /usr/local/bin/
+```
 
-# data dir + internal CA + starter config
-./bin/gh-runnerd init --token "$GITHUB_TOKEN" --owner YOUR_ORG --repo YOUR_REPO --with-examples
+After the first `v*` tag:
 
-# bake the Ubuntu 24.04 runner VM (needs KVM and several minutes)
-make runner-image
-./bin/gh-runnerd runner-image import ./images/runner/ubuntu-24.04-amd64.qcow2 --name ubuntu-24.04-amd64
-./bin/gh-runnerd runner-image activate ubuntu-24.04-amd64
+```bash
+curl -fsSL https://raw.githubusercontent.com/RefireLab/gh-runnerd/main/scripts/install-binary.sh | sudo bash
+```
 
-./bin/gh-runnerd doctor
-./bin/gh-runnerd serve --config ./gh-runnerd.toml
+CI also uploads `gh-runnerd-linux-amd64` / `arm64` as Actions artifacts on every push.
+
+### 3. GitHub token
+
+Fine-grained PAT on the repo that will use the runner:
+
+- **Administration**: read/write (creates JIT runners)
+- **Actions**: read
+- **Metadata**: read
+
+```bash
+export GH_RUNNERD_GITHUB_TOKEN=github_pat_...
+```
+
+A GitHub App is better for production: [docs/github-app.md](docs/github-app.md).
+
+### 4. Init + bake the runner VM (once)
+
+```bash
+sudo gh-runnerd init --config /etc/gh-runnerd/config.toml \
+  --data-dir /var/lib/gh-runnerd \
+  --token "$GH_RUNNERD_GITHUB_TOKEN" \
+  --owner YOUR_ORG --repo YOUR_REPO
+
+# edit /etc/gh-runnerd/config.toml if needed, then bake (~several minutes, needs network)
+cd /path/to/gh-runnerd
+sudo make runner-image
+sudo gh-runnerd runner-image import ./images/runner/ubuntu-24.04-amd64.qcow2 --name ubuntu-24.04-amd64
+sudo gh-runnerd runner-image activate ubuntu-24.04-amd64
+# arm64: ubuntu-24.04-arm64.qcow2
+```
+
+### 5. Run the daemon
+
+```bash
+sudo gh-runnerd doctor --config /etc/gh-runnerd/config.toml
+sudo gh-runnerd serve --config /etc/gh-runnerd/config.toml
+# or, after make deb / dpkg -i: sudo systemctl enable --now gh-runnerd
+```
+
+Poll mode works without a public webhook. For org-scale, expose `/webhook` and set `webhook.secret`.
+
+### 6. Workflow in that repo
+
+```yaml
+jobs:
+  test:
+    runs-on: gh-runnerd
+    steps:
+      - uses: actions/checkout@v4
+      - run: uname -a
 ```
 
 Workflow:
