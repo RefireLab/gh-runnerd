@@ -11,6 +11,8 @@ import (
 	"strings"
 
 	"golang.org/x/term"
+
+	"github.com/RefireLab/gh-runnerd/internal/ansi"
 )
 
 // Prompter asks questions on a terminal and falls back to plain line
@@ -20,6 +22,7 @@ type Prompter struct {
 	inFD  int
 	out   io.Writer
 	isTTY bool
+	color bool
 }
 
 // New wraps in/out. Interactive() is true only when in is a terminal.
@@ -29,15 +32,28 @@ func New(in io.Reader, out io.Writer) *Prompter {
 		p.inFD = int(f.Fd())
 		p.isTTY = term.IsTerminal(p.inFD)
 	}
+	if f, ok := out.(*os.File); ok {
+		p.color = ansi.Enabled(f)
+	}
 	return p
 }
 
 // Interactive reports whether prompts can be shown to a human.
 func (p *Prompter) Interactive() bool { return p.isTTY }
 
-// Say prints one line of wizard output.
+// Say prints one line of wizard output. Alert lines ([!!]) are painted
+// red and success markers ([ok]) green when the output is a terminal.
 func (p *Prompter) Say(format string, args ...any) {
-	fmt.Fprintf(p.out, format+"\n", args...)
+	msg := fmt.Sprintf(format, args...)
+	if p.color {
+		switch {
+		case strings.HasPrefix(msg, "[!!]"):
+			msg = ansi.Red(msg)
+		case strings.HasPrefix(msg, "[ok]"):
+			msg = ansi.Green("[ok]") + strings.TrimPrefix(msg, "[ok]")
+		}
+	}
+	fmt.Fprintln(p.out, msg)
 }
 
 func (p *Prompter) readLine() (string, error) {
