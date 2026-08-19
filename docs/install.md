@@ -28,11 +28,28 @@ ls -l /dev/kvm
 
 If the node is a VM itself, enable nested virtualization in the hypervisor **or** run gh-runnerd on bare metal. Nested virt is **not** required for job *containers* (they use the VM kernel). Nested virt is only needed if you try to run VMs inside the runner VM, which gh-runnerd does not do.
 
+## Binaries
+
+The daemon is two static Linux binaries: `gh-runnerd` (host) and `gh-runnerd-guest` (baked into the VM). They do **not** replace QEMU/KVM or the Ubuntu qcow2.
+
+Until a GitHub Release exists (`v*` tag):
+
+```bash
+make build
+sudo install -m 0755 bin/gh-runnerd bin/gh-runnerd-guest /usr/local/bin/
+```
+
+CI uploads `dist/gh-runnerd-linux-amd64` (and arm64) as workflow artifacts. After the first release:
+
+```bash
+sudo ./scripts/install-binary.sh
+```
+
 ## Build from source
 
 ```bash
 make build
-sudo install -m 0755 bin/gh-runnerd bin/gh-runnerd-guest /usr/bin/
+sudo install -m 0755 bin/gh-runnerd bin/gh-runnerd-guest /usr/local/bin/
 ```
 
 ## Debian package
