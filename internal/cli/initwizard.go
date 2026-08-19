@@ -261,11 +261,16 @@ func askToken(ctx context.Context, p *wizard.Prompter, presetToken string, ghCfg
 	p.Say("")
 	p.Say("GitHub token")
 	p.Say("------------")
-	p.Say("gh-runnerd needs one token to register runners. Create it here:")
+	p.Say("gh-runnerd needs one fine-grained token to register runners. Create it here:")
 	p.Say("  https://github.com/settings/personal-access-tokens/new")
-	p.Say("  1. Repository access: pick the repo(s) that will use these runners")
-	p.Say("  2. Repository permissions -> Administration: Read and write")
-	p.Say("  (or a classic token with the \"repo\" scope)")
+	p.Say("  1. Resource owner: your organization (for org runners) or your account")
+	p.Say("  2. Repository access: the repo(s) that will run jobs on these runners")
+	p.Say("  3. Repository permissions:")
+	p.Say("       Actions:        Read-only        (finds queued jobs)")
+	p.Say("       Administration: Read and write   (registers repo-level runners)")
+	p.Say("  4. Organization permissions (only for org-level runners):")
+	p.Say("       Self-hosted runners: Read and write")
+	p.Say("  (classic token: \"repo\" scope; org runners also need \"admin:org\")")
 	for i := 0; i < 3; i++ {
 		tok, err := p.AskSecret("Paste the token (input is hidden; Enter to skip for now)")
 		if err != nil || tok == "" {
@@ -366,7 +371,12 @@ func verifyRunnerTarget(ctx context.Context, p *wizard.Prompter, cfg *config.Con
 	}
 	if err := ghapi.New(cfg.GitHub).CheckRunnerAccess(ctx); err != nil {
 		p.Say("[!!] the token cannot manage runners there (%v)", shortErr(err))
-		p.Say("     the token needs: Administration: Read and write on that repo/org")
+		if strings.EqualFold(cfg.GitHub.Scope, "org") {
+			p.Say("     needed: organization permission \"Self-hosted runners: Read and write\";")
+			p.Say("     the token's resource owner must be %s and you must be an org admin", cfg.GitHub.Org)
+		} else {
+			p.Say("     needed on %s/%s: \"Administration: Read and write\" and \"Actions: Read-only\"", cfg.GitHub.Owner, cfg.GitHub.Repo)
+		}
 		return err
 	}
 	target := cfg.GitHub.Owner + "/" + cfg.GitHub.Repo

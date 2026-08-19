@@ -40,11 +40,18 @@ runs-on: gh-runnerd
 
 JIT configs are created with those labels (plus any extra labels from the queued job) so GitHub can assign the job. Idle VMs are recycled after 45 minutes because JIT registrations expire in about an hour.
 
-## Fine-grained PAT (dev)
+## Fine-grained PAT
 
-For a single repo, a PAT with:
+Runners in a single repository — token with:
 
-- Actions: read
-- Administration: read/write (or the "Self-hosted runners" permission where available)
+- Repository permissions: **Actions: Read-only**, **Administration: Read and write**, Metadata: Read-only (added automatically)
 
-Export as `GH_RUNNERD_GITHUB_TOKEN` and pass `--token` to `init`.
+Runners shared by an organization — token with:
+
+- Resource owner: **the organization** (not your personal account), and you must be an org admin
+- Organization permissions: **Self-hosted runners: Read and write**
+- Repository permissions: **Actions: Read-only** on the repos gh-runnerd polls for queued jobs (`github.poll_repos`)
+
+Classic tokens: `repo` scope for repo runners, plus `admin:org` for org runners.
+
+Export as `GH_RUNNERD_GITHUB_TOKEN` or paste into the `init` wizard, which verifies runner access live.

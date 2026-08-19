@@ -9,7 +9,9 @@ Every job runs in a **fresh disposable virtual machine** with Docker inside. Whe
 1. A machine with **Ubuntu 24.04 or newer** — a home server, an old PC, or a VPS with nested virtualization.
    Quick check: `ls /dev/kvm` — if that file exists, you are good.
 2. About **10 GB of free disk** and a normal internet connection.
-3. A **GitHub account**. The setup wizard tells you exactly which token to create and checks it for you.
+3. A **GitHub token** (fine-grained). The setup wizard walks you through creating it and checks it live. The permissions it needs:
+   - runners for **one repository** — Repository permissions: `Actions: Read-only`, `Administration: Read and write`
+   - runners for an **organization** — Resource owner: the organization; Organization permissions: `Self-hosted runners: Read and write`; plus `Actions: Read-only` on the repos it watches for jobs
 
 ## Set it up (one command)
 
@@ -22,7 +24,7 @@ tar -xzf gh-runnerd_*.tar.gz
 sudo ./gh-runnerd init
 ```
 
-> No `gh` CLI? Once the repo is public you can use plain curl:
+> No `gh` CLI? Use plain curl:
 > `curl -fsSL https://raw.githubusercontent.com/RefireLab/gh-runnerd/main/scripts/install-binary.sh | sudo bash`
 > (installs the binaries into `/usr/local/bin`, then run `sudo gh-runnerd init`)
 
