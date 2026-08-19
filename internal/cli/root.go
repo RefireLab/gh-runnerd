@@ -12,8 +12,13 @@ import (
 
 func Root() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:           "gh-runnerd",
-		Short:         "Ephemeral Ubuntu VM GitHub Actions runners",
+		Use:   "gh-runnerd",
+		Short: "Ephemeral Ubuntu VM GitHub Actions runners",
+		Long: fmt.Sprintf(`gh-runnerd %s — ephemeral Ubuntu VM GitHub Actions runners
+
+by RefireLab
+  https://refirelab.com/
+  https://github.com/RefireLab/gh-runnerd`, version.Version),
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		Version:       version.Version,

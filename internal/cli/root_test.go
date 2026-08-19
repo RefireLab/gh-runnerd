@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/RefireLab/gh-runnerd/internal/version"
 )
 
 func TestRootHelp(t *testing.T) {
@@ -21,6 +23,16 @@ func TestRootHelp(t *testing.T) {
 	for _, s := range []string{"init", "doctor", "serve", "image", "runner-image"} {
 		if !strings.Contains(out, s) {
 			t.Fatalf("help missing %s:\n%s", s, out)
+		}
+	}
+	for _, s := range []string{
+		"gh-runnerd " + version.Version,
+		"RefireLab",
+		"https://refirelab.com/",
+		"https://github.com/RefireLab/gh-runnerd",
+	} {
+		if !strings.Contains(out, s) {
+			t.Fatalf("help missing %q:\n%s", s, out)
 		}
 	}
 }

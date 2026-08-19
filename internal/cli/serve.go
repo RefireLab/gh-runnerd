@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"os"
 	"os/signal"
@@ -10,6 +11,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/RefireLab/gh-runnerd/internal/daemon"
+	"github.com/RefireLab/gh-runnerd/internal/version"
 )
 
 func serveCmd() *cobra.Command {
@@ -17,6 +19,7 @@ func serveCmd() *cobra.Command {
 		Use:   "serve",
 		Short: "Run the daemon: VMs, registry, webhook, poller",
 		RunE: func(cmd *cobra.Command, args []string) error {
+			fmt.Fprintf(cmd.OutOrStdout(), "gh-runnerd %s\n", version.Version)
 			cfg, _, err := loadConfigRequired(cmd)
 			if err != nil {
 				return err
