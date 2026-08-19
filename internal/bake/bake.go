@@ -149,8 +149,10 @@ func Run(ctx context.Context, o Options) error {
 	if o.Arch != runtime.GOARCH {
 		return fmt.Errorf("cannot bake a %s image on a %s host: baking needs KVM for the same architecture", o.Arch, runtime.GOARCH)
 	}
-	if err := CheckKVM(); err != nil {
-		return err
+	if accel() == "kvm" {
+		if err := CheckKVM(); err != nil {
+			return err
+		}
 	}
 	if missing := MissingTools(BakeTools(o.Arch)); len(missing) > 0 {
 		var bins []string
@@ -268,13 +270,28 @@ func writeSeed(seedDir, guest string, o Options) error {
 	return nil
 }
 
+// accel returns the QEMU accelerator. GH_RUNNERD_BAKE_ACCEL=tcg is an
+// escape hatch for CI smoke tests on hosts without working KVM; real
+// deployments always use KVM.
+func accel() string {
+	if v := os.Getenv("GH_RUNNERD_BAKE_ACCEL"); v != "" {
+		return v
+	}
+	return "kvm"
+}
+
 func bootBakeVM(ctx context.Context, o Options, base, seedISO, seedDir, consoleLog string) error {
+	acc := accel()
+	cpu := "host"
+	if acc != "kvm" {
+		cpu = "max"
+	}
 	bin := "qemu-system-x86_64"
-	machine := "q35,accel=kvm"
+	machine := "q35,accel=" + acc
 	var extra []string
 	if o.Arch == "arm64" {
 		bin = "qemu-system-aarch64"
-		machine = "virt,accel=kvm"
+		machine = "virt,accel=" + acc
 		fw, err := Arm64Firmware()
 		if err != nil {
 			return err
@@ -284,7 +301,7 @@ func bootBakeVM(ctx context.Context, o Options, base, seedISO, seedDir, consoleL
 	args := []string{
 		"-name", "gh-runnerd-bake",
 		"-machine", machine,
-		"-cpu", "host",
+		"-cpu", cpu,
 		"-smp", strconv.Itoa(o.CPUs),
 		"-m", strconv.Itoa(o.MemoryMB),
 		"-nographic",

@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -52,6 +53,7 @@ type bakeOverrides struct {
 	ExtraRuns     []string
 	Fresh         bool
 	Verbose       bool
+	Timeout       time.Duration
 }
 
 // bakeAndInstall builds the golden image with the config's VM settings,
@@ -87,6 +89,7 @@ func bakeAndInstall(ctx context.Context, cfg config.Config, out io.Writer, o bak
 		ExtraRuns:     o.ExtraRuns,
 		Fresh:         o.Fresh,
 		Verbose:       o.Verbose,
+		Timeout:       o.Timeout,
 		Out:           out,
 	})
 	if err != nil {
@@ -138,6 +141,7 @@ func runnerBakeCmd() *cobra.Command {
 	cmd.Flags().StringVar(&o.Guest, "guest", "", "path to the gh-runnerd-guest binary")
 	cmd.Flags().BoolVar(&o.Fresh, "fresh", false, "re-download the Ubuntu cloud image instead of using the cache")
 	cmd.Flags().BoolVar(&o.Verbose, "verbose", false, "stream the VM console while baking")
+	cmd.Flags().DurationVar(&o.Timeout, "timeout", 0, "abort the build after this long (default 45m; raise on slow internet)")
 	return cmd
 }
 
