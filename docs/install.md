@@ -35,7 +35,7 @@ The daemon is two static Linux binaries: `gh-runnerd` (host) and `gh-runnerd-gue
 From [GitHub Releases](https://github.com/RefireLab/gh-runnerd/releases):
 
 ```bash
-VERSION=0.2.1
+VERSION=0.2.2
 ARCH=amd64   # or arm64
 curl -fL -o gh-runnerd.tar.gz \
   "https://github.com/RefireLab/gh-runnerd/releases/download/v${VERSION}/gh-runnerd_${VERSION}_linux_${ARCH}.tar.gz"
@@ -51,7 +51,7 @@ sha256sum -c --ignore-missing gh-runnerd_${VERSION}_checksums.txt
 While the repository is **private**, anonymous URLs return 404 — use the authenticated GitHub CLI:
 
 ```bash
-gh release download v0.2.1 --repo RefireLab/gh-runnerd \
+gh release download v0.2.2 --repo RefireLab/gh-runnerd \
   --pattern 'gh-runnerd_*_linux_amd64.tar.gz'   # or _arm64
 ```
 
@@ -93,8 +93,8 @@ Prefer a GitHub App for production credentials ([github-app.md](github-app.md)).
 Releases are tag-driven and built by GoReleaser in CI ([.github/workflows/release.yml](../.github/workflows/release.yml), config in [.goreleaser.yaml](../.goreleaser.yaml)):
 
 ```bash
-git tag v0.2.1
-git push origin v0.2.1
+git tag v0.2.2
+git push origin v0.2.2
 ```
 
 The workflow cross-compiles linux amd64/arm64, packs `gh-runnerd_<version>_linux_<arch>.tar.gz`, generates the checksums file and changelog, and publishes the GitHub Release. Dry-run locally without publishing:

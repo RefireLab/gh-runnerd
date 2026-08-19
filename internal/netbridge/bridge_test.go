@@ -24,6 +24,9 @@ func TestSetupCommandsStayOnInternalBridge(t *testing.T) {
 	if !strings.Contains(joined, "-i br-ghrunnerd -o br-ghrunnerd -j DROP") {
 		t.Fatal("vm-to-vm must be dropped")
 	}
+	if !strings.Contains(joined, "ip addr replace 10.87.0.1/16 dev br-ghrunnerd") {
+		t.Fatal("host address must be assigned idempotently (replace, not add)")
+	}
 }
 
 func TestMACAndIP(t *testing.T) {
