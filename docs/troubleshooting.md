@@ -18,7 +18,9 @@ gh-runnerd doctor
 | `docker pull` 429 | Docker Hub rate limit. Set `registry.dockerhub_username/token`, `image pull` the image once, or use `gh-runnerd.local/...`. |
 | Alpine job fails on bash | Container default shell is `sh`. See [containers.md](containers.md). |
 | Digest mismatch | Re-import the tar; `image inspect` shows `Digest OK: false`. |
-| Registry connection refused from VM | Serve isn't running, or registry didn't bind `10.87.0.1:443` (bridge setup failed — needs root). |
+| Registry connection refused from VM | Serve isn't running, or the registry didn't bind (bridge setup failed — needs root). Check `gh-runnerd doctor`. |
+| `registry listen ...: address already in use` | Another service owns that port. Re-run `sudo gh-runnerd init` (it picks a free port) or set `registry.listen = "10.87.0.1:42443"` in the config. |
+| VM network overlaps LAN/Docker/VPN | `gh-runnerd doctor` warns about it; re-run `sudo gh-runnerd init` and pick the suggested free subnet, then `sudo gh-runnerd runner-image update`. |
 
 Daemon logs go to stderr / journald:
 

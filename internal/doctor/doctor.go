@@ -2,6 +2,7 @@ package doctor
 
 import (
 	"fmt"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -11,6 +12,7 @@ import (
 	"github.com/RefireLab/gh-runnerd/internal/config"
 	"github.com/RefireLab/gh-runnerd/internal/host"
 	"github.com/RefireLab/gh-runnerd/internal/images"
+	"github.com/RefireLab/gh-runnerd/internal/netbridge"
 	"github.com/RefireLab/gh-runnerd/internal/qemu"
 	"github.com/RefireLab/gh-runnerd/internal/tlsutil"
 )
@@ -143,6 +145,13 @@ func Run(cfg config.Config) Report {
 		add(Check{"webhook", OK, "secret configured"})
 	}
 
+	if over := netbridge.FindOverlap(cfg.Network.CIDR, cfg.Network.Bridge); over != "" {
+		add(Check{"vm-network", Warn, fmt.Sprintf("%s overlaps your network on %s — pick another via gh-runnerd init", cfg.Network.CIDR, over)})
+	} else {
+		add(Check{"vm-network", OK, cfg.Network.CIDR})
+	}
+	add(registryPortCheck(cfg))
+
 	if _, err := os.Stat(filepath.Join(dirs.State, "status.json")); err == nil {
 		add(Check{"daemon", OK, "status file present"})
 	} else {
@@ -150,4 +159,25 @@ func Run(cfg config.Config) Report {
 	}
 
 	return Report{Checks: checks}
+}
+
+// registryPortCheck probes the embedded registry bind address. The bridge
+// may not exist yet, so it falls back to a wildcard probe of the port.
+func registryPortCheck(cfg config.Config) Check {
+	listen := cfg.RegistryListen()
+	if ln, err := net.Listen("tcp", listen); err == nil {
+		ln.Close()
+		return Check{"registry-port", OK, listen + " is free"}
+	} else if strings.Contains(err.Error(), "address already in use") {
+		return Check{"registry-port", Warn, listen + " is in use (fine if gh-runnerd is running; otherwise change registry.listen)"}
+	}
+	_, port, err := net.SplitHostPort(listen)
+	if err != nil {
+		return Check{"registry-port", Error, "registry.listen is not host:port — fix it or re-run gh-runnerd init"}
+	}
+	if ln, err := net.Listen("tcp", ":"+port); err == nil {
+		ln.Close()
+		return Check{"registry-port", OK, "port " + port + " is free (bridge comes up at serve)"}
+	}
+	return Check{"registry-port", Warn, "port " + port + " is taken by another service — set registry.listen to a free port or re-run gh-runnerd init"}
 }

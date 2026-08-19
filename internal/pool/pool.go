@@ -194,7 +194,7 @@ func (m *Manager) spawn(ctx context.Context, labels []string, jobID int64) (*VM,
 	overlay := filepath.Join(m.cfg.Layout().Runtime, name+".qcow2")
 	tap := fmt.Sprintf("tap-ghrd%d", idx)
 	mac := netbridge.MACForIndex(idx)
-	ip := netbridge.IPForIndex(idx)
+	ip := netbridge.IPForIndex(m.cfg.Network.CIDR, idx)
 	cid := uint32(3 + idx)
 
 	if err := m.backend.CreateOverlay(img.Path, overlay, m.cfg.DiskGB()); err != nil {
@@ -207,7 +207,7 @@ func (m *Manager) spawn(ctx context.Context, labels []string, jobID int64) (*VM,
 	m.backend.RegisterDHCP(netbridge.Lease{
 		MAC:    mac,
 		IP:     parseIPv4(ip),
-		Mask:   parseMask(),
+		Mask:   netbridge.MaskFromCIDR(m.cfg.Network.CIDR),
 		Router: parseIPv4(m.cfg.Network.HostIP),
 	})
 
@@ -319,8 +319,4 @@ func (m *Manager) destroy(vm *VM) {
 
 func parseIPv4(s string) net.IP {
 	return net.ParseIP(s).To4()
-}
-
-func parseMask() net.IPMask {
-	return net.CIDRMask(16, 32)
 }

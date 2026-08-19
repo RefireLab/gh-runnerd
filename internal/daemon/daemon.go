@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/RefireLab/gh-runnerd/internal/config"
@@ -49,7 +50,14 @@ func (d *Daemon) Run(ctx context.Context) error {
 		return fmt.Errorf("doctor found blocking problems; fix them or see gh-runnerd doctor")
 	}
 
-	netCfg := netbridge.Config{Bridge: d.Cfg.Network.Bridge, CIDR: d.Cfg.Network.CIDR, HostIP: d.Cfg.Network.HostIP}
+	netCfg := netbridge.Config{
+		Bridge:        d.Cfg.Network.Bridge,
+		CIDR:          d.Cfg.Network.CIDR,
+		HostIP:        d.Cfg.Network.HostIP,
+		RegistryPort:  d.Cfg.Network.RegistryPort,
+		RegistryLocal: d.Cfg.RegistryLocalPort(),
+		GuestPort:     d.Cfg.Network.GuestPort,
+	}
 	if err := netbridge.Setup(netCfg); err != nil {
 		return fmt.Errorf("network bridge: %w", err)
 	}
@@ -75,16 +83,21 @@ func (d *Daemon) Run(ctx context.Context) error {
 		Log: d.Log,
 	}
 
-	ln, err := tls.Listen("tcp", d.Cfg.Registry.Listen, &tls.Config{
+	regListen := d.Cfg.RegistryListen()
+	ln, err := tls.Listen("tcp", regListen, &tls.Config{
 		Certificates: []tls.Certificate{cert},
 		MinVersion:   tls.VersionTLS12,
 	})
 	if err != nil {
-		return fmt.Errorf("registry listen %s: %w (bridge must own %s)", d.Cfg.Registry.Listen, err, d.Cfg.Network.HostIP)
+		if strings.Contains(err.Error(), "address already in use") {
+			return fmt.Errorf("registry listen %s: %w — another service owns this port; set registry.listen to a free port (e.g. %s:%d) or re-run gh-runnerd init",
+				regListen, err, d.Cfg.Network.HostIP, netbridge.DefaultRegistryLocalPort)
+		}
+		return fmt.Errorf("registry listen %s: %w (the bridge must own %s)", regListen, err, d.Cfg.Network.HostIP)
 	}
 	regSrv := &http.Server{Handler: reg.Handler()}
 	go func() {
-		d.Log.Info("registry listening", "addr", d.Cfg.Registry.Listen)
+		d.Log.Info("registry listening", "addr", regListen)
 		if err := regSrv.Serve(ln); err != nil && err != http.ErrServerClosed {
 			d.Log.Error("registry server", "err", err)
 		}

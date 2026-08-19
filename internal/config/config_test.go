@@ -51,6 +51,45 @@ func TestValidateRejectsBadPool(t *testing.T) {
 	}
 }
 
+func TestRegistryListenDerived(t *testing.T) {
+	t.Parallel()
+	cfg := Defaults()
+	if got := cfg.RegistryListen(); got != "10.87.0.1:42443" {
+		t.Fatalf("derived listen %q", got)
+	}
+	if cfg.RegistryLocalPort() != 42443 {
+		t.Fatalf("port %d", cfg.RegistryLocalPort())
+	}
+	cfg.Network.HostIP = "10.99.0.1"
+	if got := cfg.RegistryListen(); got != "10.99.0.1:42443" {
+		t.Fatalf("derived listen %q", got)
+	}
+	cfg.Registry.Listen = "10.99.0.1:443"
+	if got := cfg.RegistryListen(); got != "10.99.0.1:443" || cfg.RegistryLocalPort() != 443 {
+		t.Fatalf("explicit listen %q port %d", got, cfg.RegistryLocalPort())
+	}
+}
+
+func TestValidateRejectsBadNetwork(t *testing.T) {
+	t.Parallel()
+	cfg := Defaults()
+	cfg.Network.HostIP = "not-an-ip"
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("bad host_ip must fail")
+	}
+	cfg = Defaults()
+	cfg.Network.HostIP = "192.168.1.1"
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("host_ip outside cidr must fail")
+	}
+	cfg = Defaults()
+	cfg.Network.HostIP = "10.99.0.1"
+	cfg.Network.CIDR = "10.99.0.0/16"
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("custom consistent network: %v", err)
+	}
+}
+
 func TestRelativeDataDirResolvesToConfigDir(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()

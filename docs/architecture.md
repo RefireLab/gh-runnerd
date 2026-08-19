@@ -5,8 +5,9 @@ Product rule: **`runs-on` selects gh-runnerd infrastructure. `container.image` s
 ```text
 Ubuntu host
 └── gh-runnerd
-    ├── isolated bridge br-ghrunnerd (10.87.0.0/16)
-    │     ├── pull-only OCI registry at 10.87.0.1:443
+    ├── isolated bridge br-ghrunnerd (10.87.0.0/16, configurable at init)
+    │     ├── pull-only OCI registry on 10.87.0.1:42443
+    │     │     (VMs dial :443 → iptables REDIRECT on the bridge)
     │     ├── guest control TCP 10.87.0.1:5099 (vsock when available)
     │     └── tiny DHCP
     └── disposable Ubuntu 24.04 VM (overlay qcow2)

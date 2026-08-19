@@ -227,6 +227,10 @@ func askConfigQuestions(ctx context.Context, p *wizard.Prompter, preset initPres
 		return config.Config{}, err
 	}
 
+	if err := askNetwork(p, &cfg); err != nil {
+		return config.Config{}, err
+	}
+
 	p.Say("")
 	maxConc, err := p.AskInt("How many jobs may run at the same time? (each uses ~4 GB RAM while running)", 2)
 	if err != nil {
@@ -392,6 +396,10 @@ func verifyRunnerTarget(ctx context.Context, p *wizard.Prompter, cfg *config.Con
 func offerBake(cmd *cobra.Command, p *wizard.Prompter, opsCfg config.Config, kvmErr error) bool {
 	if hasActiveRunnerImage(opsCfg) {
 		p.Say("[ok] runner VM image already present")
+		if opsCfg.Network.HostIP != "10.87.0.1" {
+			p.Say("     note: if you changed the VM network since this image was built,")
+			p.Say("     rebuild it so VMs learn the new address: sudo gh-runnerd runner-image update")
+		}
 		return true
 	}
 	p.Say("")

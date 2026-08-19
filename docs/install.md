@@ -35,7 +35,7 @@ The daemon is two static Linux binaries: `gh-runnerd` (host) and `gh-runnerd-gue
 From [GitHub Releases](https://github.com/RefireLab/gh-runnerd/releases):
 
 ```bash
-VERSION=0.2.4
+VERSION=0.2.5
 ARCH=amd64   # or arm64
 curl -fL -o gh-runnerd.tar.gz \
   "https://github.com/RefireLab/gh-runnerd/releases/download/v${VERSION}/gh-runnerd_${VERSION}_linux_${ARCH}.tar.gz"
@@ -51,7 +51,7 @@ sha256sum -c --ignore-missing gh-runnerd_${VERSION}_checksums.txt
 Or with the GitHub CLI:
 
 ```bash
-gh release download v0.2.4 --repo RefireLab/gh-runnerd \
+gh release download v0.2.5 --repo RefireLab/gh-runnerd \
   --pattern 'gh-runnerd_*_linux_amd64.tar.gz'   # or _arm64
 ```
 
@@ -79,6 +79,8 @@ sudo install -m 0755 bin/gh-runnerd bin/gh-runnerd-guest /usr/local/bin/
 sudo ./gh-runnerd init
 ```
 
+The wizard also picks a private VM network (default `10.87.0.1/16`) that provably does not overlap your LAN/Docker/VPN, and a free local port for the embedded registry (default `42443`) — VMs still reach it on 443 via an iptables redirect scoped to the bridge, so the host's real 443 stays untouched.
+
 The wizard offers two layouts:
 
 - **System service** (root + systemd): config in `/etc/gh-runnerd/config.toml`, data in `/var/lib/gh-runnerd`, binaries in `/usr/local/bin`, a `gh-runnerd.service` unit, optional autostart.
@@ -104,8 +106,8 @@ Prefer a GitHub App for production credentials ([github-app.md](github-app.md)).
 Releases are tag-driven and built by GoReleaser in CI ([.github/workflows/release.yml](../.github/workflows/release.yml), config in [.goreleaser.yaml](../.goreleaser.yaml)):
 
 ```bash
-git tag v0.2.4
-git push origin v0.2.4
+git tag v0.2.5
+git push origin v0.2.5
 ```
 
 The workflow cross-compiles linux amd64/arm64, packs `gh-runnerd_<version>_linux_<arch>.tar.gz`, generates the checksums file and changelog, and publishes the GitHub Release. Dry-run locally without publishing:
