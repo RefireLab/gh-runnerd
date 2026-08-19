@@ -51,6 +51,25 @@ func TestValidateRejectsBadPool(t *testing.T) {
 	}
 }
 
+func TestRelativeDataDirResolvesToConfigDir(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "gh-runnerd.toml")
+	cfg := Defaults()
+	cfg.DataDir = "gh-runnerd-data"
+	if err := WriteFile(path, cfg); err != nil {
+		t.Fatal(err)
+	}
+	got, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := filepath.Join(dir, "gh-runnerd-data")
+	if got.DataDir != want {
+		t.Fatalf("data dir %q, want %q", got.DataDir, want)
+	}
+}
+
 func TestGitHubTokenFromEnv(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.toml")

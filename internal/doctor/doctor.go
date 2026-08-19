@@ -85,6 +85,11 @@ func Run(cfg config.Config) Report {
 	} else {
 		add(Check{"iptables", Warn, "iptables not in PATH; serve needs it to create the isolated bridge"})
 	}
+	if _, err := exec.LookPath("cloud-localds"); err == nil {
+		add(Check{"cloud-localds", OK, "cloud-image-utils found"})
+	} else {
+		add(Check{"cloud-localds", Warn, "cloud-localds not in PATH; runner-image bake needs it (apt install cloud-image-utils)"})
+	}
 
 	dirs := cfg.Layout()
 	if st, err := os.Stat(dirs.Root); err == nil && st.IsDir() {
@@ -109,7 +114,7 @@ func Run(cfg config.Config) Report {
 	} else if _, err := cat.Active(); err == nil {
 		add(Check{"runner-image", OK, "active template present"})
 	} else {
-		add(Check{"runner-image", Error, fmt.Sprintf("no Ubuntu 24.04 runner image in %s — run images/runner/bake.sh or gh-runnerd runner-image import", dirs.Runner)})
+		add(Check{"runner-image", Error, fmt.Sprintf("no Ubuntu 24.04 runner image in %s — run: gh-runnerd runner-image bake", dirs.Runner)})
 	}
 
 	if cfg.HasGitHubAuth() {

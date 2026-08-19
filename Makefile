@@ -41,8 +41,8 @@ dist:
 	CGO_ENABLED=0 GOOS=linux GOARCH=arm64 $(GO) build $(GOFLAGS) -ldflags '$(LDFLAGS)' \
 		-o dist/gh-runnerd-guest-linux-arm64 ./cmd/gh-runnerd-guest
 
-runner-image: guest
-	./images/runner/bake.sh
+runner-image: build
+	./bin/gh-runnerd runner-image bake
 
 deb: build
 	./packaging/deb/build.sh

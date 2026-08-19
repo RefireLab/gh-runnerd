@@ -169,6 +169,13 @@ func Load(path string) (Config, error) {
 	if cfg.DataDir == "" {
 		cfg.DataDir = defaultDataDir()
 	}
+	// A relative data_dir lives next to the config file so a portable
+	// gh-runnerd folder keeps working when moved or run from elsewhere.
+	if !filepath.IsAbs(cfg.DataDir) {
+		if abs, absErr := filepath.Abs(path); absErr == nil {
+			cfg.DataDir = filepath.Join(filepath.Dir(abs), cfg.DataDir)
+		}
+	}
 	cfg.applyEnv()
 	if err := cfg.Validate(); err != nil {
 		return Config{}, err

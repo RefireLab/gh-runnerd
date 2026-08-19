@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
 # Install gh-runnerd + gh-runnerd-guest from the latest GitHub Release tar.gz.
-# This is only the Go binaries. You still need Ubuntu 24.04, KVM/QEMU,
-# and a baked ubuntu-24.04-*.qcow2 runner image.
+# After installing, run the setup wizard: sudo gh-runnerd init
 set -euo pipefail
 
 REPO="${REPO:-RefireLab/gh-runnerd}"
@@ -56,4 +55,4 @@ done
 mkdir -p "$DEST"
 install -m 0755 "$tmpdir/gh-runnerd" "$tmpdir/gh-runnerd-guest" "$DEST/"
 echo "installed $DEST/gh-runnerd and $DEST/gh-runnerd-guest ($("$DEST/gh-runnerd" --version))"
-echo "still required: qemu-system, /dev/kvm, and a baked Ubuntu runner qcow2 (see README)"
+echo "next: sudo gh-runnerd init   (interactive setup wizard)"
