@@ -55,6 +55,13 @@ Or use the helper that detects the arch and latest release:
 sudo ./scripts/install-binary.sh
 ```
 
+For a **private** repository the anonymous URLs above return 404. Download with the authenticated GitHub CLI:
+
+```bash
+gh release download v0.1.0 --repo RefireLab/gh-runnerd \
+  --pattern 'gh-runnerd_*_linux_amd64.tar.gz'   # or _arm64
+```
+
 ## Build from source
 
 ```bash

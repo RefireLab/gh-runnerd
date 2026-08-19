@@ -49,6 +49,15 @@ One-liner that picks the arch and the latest release automatically:
 curl -fsSL https://raw.githubusercontent.com/RefireLab/gh-runnerd/main/scripts/install-binary.sh | sudo bash
 ```
 
+While this repository is private, anonymous downloads return 404 — use the authenticated GitHub CLI instead:
+
+```bash
+gh release download v0.1.0 --repo RefireLab/gh-runnerd \
+  --pattern 'gh-runnerd_*_linux_amd64.tar.gz'
+tar -xzf gh-runnerd_*_linux_amd64.tar.gz
+sudo install -m 0755 gh-runnerd gh-runnerd-guest /usr/local/bin/
+```
+
 Or build from source (`git clone` → `make build` → `sudo install -m 0755 bin/gh-runnerd bin/gh-runnerd-guest /usr/local/bin/`).
 
 ### 3. GitHub token
