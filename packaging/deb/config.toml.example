@@ -1,0 +1,52 @@
+data_dir = "/var/lib/gh-runnerd"
+
+[github]
+base_url = "https://api.github.com"
+# Prefer a GitHub App. A PAT works for a single repository.
+token = ""
+app_id = 0
+app_private_key_path = ""
+installation_id = 0
+scope = "repo"
+owner = "YOUR_ORG"
+repo = "YOUR_REPO"
+org = ""
+runner_group_id = 1
+poll_interval = "15s"
+
+[runner]
+labels = ["gh-runnerd"]
+name_prefix = "gh-runnerd"
+
+[pool]
+min_idle = 0
+max_concurrent = 4
+job_timeout = "6h"
+recycle_idle_after = "45m"
+
+[vm]
+cpus = 2
+memory = "4G"
+disk = "40G"
+template = "ubuntu-24.04"
+boot_timeout = "90s"
+
+[registry]
+listen = "10.87.0.1:443"
+pinned_quota = "50G"
+cache_quota = "50G"
+# Optional Docker Hub credentials to raise pull rate limits for the host cache.
+dockerhub_username = ""
+dockerhub_token = ""
+
+[network]
+bridge = "br-ghrunnerd"
+cidr = "10.87.0.0/16"
+host_ip = "10.87.0.1"
+guest_port = 5099
+registry_port = 443
+
+[webhook]
+listen = "127.0.0.1:8080"
+path = "/webhook"
+secret = ""

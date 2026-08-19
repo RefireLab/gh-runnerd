@@ -1,0 +1,16 @@
+name: private-ghcr
+on: [push]
+permissions:
+  contents: read
+  packages: read
+jobs:
+  build:
+    runs-on: gh-runnerd
+    container:
+      image: ghcr.io/my-company/private-ci:2026.08
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+      - run: ./build.sh

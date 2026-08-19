@@ -1,0 +1,13 @@
+/bin/
+/dist/
+/gh-runnerd-data/
+*.qcow2
+*.qcow2.tmp
+*.img
+/testdata/*.tar
+coverage.out
+.idea/
+.vscode/
+*.swp
+.env
+/packaging/deb/rootfs/

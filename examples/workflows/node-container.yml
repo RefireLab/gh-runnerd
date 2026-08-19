@@ -1,0 +1,12 @@
+name: node-container
+on: [push]
+jobs:
+  test:
+    runs-on: gh-runnerd
+    container:
+      image: node:22-bookworm
+    steps:
+      - uses: actions/checkout@v4
+      - run: node --version
+      - run: npm ci
+      - run: npm test

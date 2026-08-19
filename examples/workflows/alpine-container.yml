@@ -1,0 +1,11 @@
+name: alpine-container
+on: [push]
+jobs:
+  test:
+    runs-on: gh-runnerd
+    container:
+      image: alpine:3.22
+    steps:
+      - run: apk add --no-cache git curl
+      - run: uname -a
+      # Default shell inside containers is sh, not bash.
