@@ -14,14 +14,17 @@ The golden image is a minimal Ubuntu cloud disk with:
 It is **not** GitHub's `ubuntu-latest` kitchen sink.
 
 ```bash
-./bin/gh-runnerd runner-image list
-./bin/gh-runnerd runner-image import ./ubuntu-24.04-amd64.qcow2 --name ubuntu-24.04-amd64
-./bin/gh-runnerd runner-image validate ubuntu-24.04-amd64
-./bin/gh-runnerd runner-image activate ubuntu-24.04-amd64
-./bin/gh-runnerd runner-image update
+sudo gh-runnerd runner-image bake        # build + import + activate in one go
+sudo gh-runnerd runner-image list
+sudo gh-runnerd runner-image import ./ubuntu-24.04-amd64.qcow2   # name defaults to the file name
+sudo gh-runnerd runner-image validate ubuntu-24.04-amd64
+sudo gh-runnerd runner-image activate ubuntu-24.04-amd64
+sudo gh-runnerd runner-image update      # re-bake from the newest Ubuntu cloud image
 ```
 
-`validate` checks the file exists, SHA-256 matches `images/runner/MANIFEST`, and `qemu-img info` recognizes a disk. Live boot validation is the bake process itself.
+`bake` is built into the binary: it downloads the official Ubuntu 24.04 cloud image, boots it once under QEMU/KVM to install Docker, the pinned GitHub Actions runner, and `gh-runnerd-guest`, verifies the install completed, compresses the qcow2, and activates it. It needs `/dev/kvm`, `qemu-system-*`, `qemu-utils`, and `cloud-image-utils` (the `init` wizard installs these).
+
+`validate` checks the file exists, SHA-256 matches the catalog MANIFEST, and `qemu-img info` recognizes a disk. Live boot validation is the bake process itself.
 
 ## Runnerfile
 
@@ -36,8 +39,8 @@ PRELOAD ghcr.io/company/ci:2026.08
 ```
 
 - `FROM` must be the shipped Ubuntu 24.04 base (Alpine/Debian/Fedora are rejected).
-- `RUN` is executed while baking a new qcow2 (`images/runner/bake.sh`).
-- `PRELOAD` pulls into the **host** registry so every VM can `docker pull` it. `--bake-docker` also asks the bake script to pre-seed Docker's graph inside the qcow2.
+- `RUN` lines execute inside the VM at the end of the bake.
+- `PRELOAD` pulls into the **host** registry so every VM can `docker pull` it instantly.
 
 ## Updating the runner binary
 

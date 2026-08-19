@@ -30,7 +30,7 @@ type manifestFile struct {
 	Active string        `json:"active"`
 }
 
-// Catalog manages runner qcow2 templates under images/runner.
+// Catalog manages runner qcow2 templates in the data dir (images/runner).
 type Catalog struct {
 	Dir string
 }

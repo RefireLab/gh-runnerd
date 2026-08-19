@@ -1,0 +1,57 @@
+version: 2
+
+project_name: gh-runnerd
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - id: gh-runnerd
+    main: ./cmd/gh-runnerd
+    binary: gh-runnerd
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w -X github.com/RefireLab/gh-runnerd/internal/version.Version={{.Version}}
+  - id: gh-runnerd-guest
+    main: ./cmd/gh-runnerd-guest
+    binary: gh-runnerd-guest
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w -X github.com/RefireLab/gh-runnerd/internal/version.Version={{.Version}}
+
+archives:
+  - id: default
+    ids:
+      - gh-runnerd
+      - gh-runnerd-guest
+    formats:
+      - tar.gz
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    files:
+      - LICENSE
+      - README.md
+
+checksum:
+  name_template: "{{ .ProjectName }}_{{ .Version }}_checksums.txt"
+  algorithm: sha256
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^chore:"

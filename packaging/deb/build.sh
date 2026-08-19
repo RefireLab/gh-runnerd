@@ -45,8 +45,7 @@ fi
 if command -v systemctl >/dev/null 2>&1; then
   systemctl daemon-reload || true
 fi
-echo "Run: sudo gh-runnerd init --config /etc/gh-runnerd/config.toml"
-echo "Then bake a runner image and: sudo systemctl enable --now gh-runnerd"
+echo "Run the setup wizard: sudo gh-runnerd init"
 EOF
 chmod 0755 "$STAGE/DEBIAN/postinst"
 

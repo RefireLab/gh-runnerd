@@ -7,6 +7,7 @@ require (
 	github.com/mdlayher/vsock v1.2.1
 	github.com/pelletier/go-toml/v2 v2.2.3
 	github.com/spf13/cobra v1.8.1
+	golang.org/x/term v0.20.0
 )
 
 require (
@@ -27,5 +28,5 @@ require (
 	github.com/vbatts/tar-split v0.11.3 // indirect
 	golang.org/x/net v0.17.0 // indirect
 	golang.org/x/sync v0.2.0 // indirect
-	golang.org/x/sys v0.15.0 // indirect
+	golang.org/x/sys v0.20.0 // indirect
 )

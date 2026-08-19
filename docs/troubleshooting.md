@@ -11,7 +11,7 @@ gh-runnerd doctor
 | `only runs on Ubuntu` | Host is not Ubuntu 24.04+. |
 | `/dev/kvm missing` | Install qemu, enable VT-x/AMD-V, add user/device permissions. |
 | `qemu-system-* not in PATH` | `apt install qemu-system-x86` (or `qemu-system-arm`). |
-| `no Ubuntu 24.04 runner image` | `make runner-image` then `runner-image import` + `activate`. |
+| `no Ubuntu 24.04 runner image` | `sudo gh-runnerd runner-image bake` (builds, imports, and activates it). |
 | `github-auth` error | Set `github.token` or App id/key/installation. |
 | Job sits queued | Labels don't include `gh-runnerd`; webhook not reaching host and poll repo not set; pool at `max_concurrent`; JIT failed (check daemon logs). |
 | `guest agent did not connect` | VM didn't boot in `vm.boot_timeout`; golden image missing guest unit; bridge/DHCP broken. |

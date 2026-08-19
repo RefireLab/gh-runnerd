@@ -1,86 +1,117 @@
 # gh-runnerd
 
-Ephemeral **Ubuntu 24.04 VMs** that register as GitHub Actions self-hosted runners.
+Your own GitHub Actions runners on one Ubuntu machine.
 
-`runs-on` selects the gh-runnerd infrastructure. `container.image` selects the Linux environment for the job. Alpine is a first-class **job container** example, not the runner OS.
+Every job runs in a **fresh disposable virtual machine** with Docker inside. When the job ends, the VM is destroyed. No leftovers, no security surprises, no per-minute bills.
+
+## What you need
+
+1. A machine with **Ubuntu 24.04 or newer** — a home server, an old PC, or a VPS with nested virtualization.
+   Quick check: `ls /dev/kvm` — if that file exists, you are good.
+2. About **10 GB of free disk** and a normal internet connection.
+3. A **GitHub account**. The setup wizard tells you exactly which token to create and checks it for you.
+
+## Set it up (one command)
+
+Download the two files into a folder and run the wizard:
+
+```bash
+mkdir gh-runnerd && cd gh-runnerd
+gh release download --repo RefireLab/gh-runnerd --pattern "gh-runnerd_*_linux_$(dpkg --print-architecture).tar.gz"
+tar -xzf gh-runnerd_*.tar.gz
+sudo ./gh-runnerd init
+```
+
+> No `gh` CLI? Once the repo is public you can use plain curl:
+> `curl -fsSL https://raw.githubusercontent.com/RefireLab/gh-runnerd/main/scripts/install-binary.sh | sudo bash`
+> (installs the binaries into `/usr/local/bin`, then run `sudo gh-runnerd init`)
+
+That's it. `init` is a wizard that walks you through everything:
+
+- checks your machine (Ubuntu, virtualization),
+- installs the required packages for you (QEMU etc.),
+- asks for your GitHub token — with step-by-step instructions on where to click — and **verifies it live** against GitHub,
+- asks which repository (`owner/repo`) or organization should get the runners and verifies the access too,
+- builds the runner VM image (one time, ~600 MB download, 10-20 minutes),
+- and asks one important question: **"Install as a system service?"**
+  - **Yes** (recommended): it puts everything in the proper system places, registers a `systemd` service, and starts it on every boot. Set up and forget.
+  - **No**: everything stays in the current folder (`gh-runnerd.toml`, `gh-runnerd-data/`). Start it yourself with `sudo ./gh-runnerd serve`.
+
+Just press **Enter** at every question to accept the defaults.
+
+## Use it
+
+In any repository you connected, create `.github/workflows/ci.yml`:
+
+```yaml
+jobs:
+  build:
+    runs-on: gh-runnerd
+    steps:
+      - uses: actions/checkout@v4
+      - run: echo it works
+```
+
+Push. The job runs on your machine in a clean Ubuntu VM. Done.
+
+Want the job itself inside a container (Alpine, Node, your own image)? Same as on GitHub-hosted runners:
+
+```yaml
+jobs:
+  build:
+    runs-on: gh-runnerd
+    container:
+      image: alpine:3.22
+    steps:
+      - run: apk add --no-cache git
+      - run: uname -a
+```
+
+## Everyday commands
+
+| I want to... | Run |
+|---|---|
+| Check that everything is healthy | `gh-runnerd doctor` |
+| See the service | `systemctl status gh-runnerd` |
+| See live logs | `journalctl -u gh-runnerd -f` |
+| Rebuild the VM image (newest Ubuntu + runner) | `sudo gh-runnerd runner-image update` |
+| Add a VM image from a file | `sudo gh-runnerd runner-image import` (it's a wizard too) |
+| Re-run the whole setup | `sudo gh-runnerd init` |
+
+## If something goes wrong
+
+1. `gh-runnerd doctor` — tells you what is missing and how to fix it.
+2. `journalctl -u gh-runnerd -e` — the daemon's own words.
+3. Re-run `sudo gh-runnerd init` — it is safe to run again; it keeps your config if you want.
+4. Still stuck? [docs/troubleshooting.md](docs/troubleshooting.md).
+
+## Remove it
+
+```bash
+sudo systemctl disable --now gh-runnerd
+sudo rm -f /etc/systemd/system/gh-runnerd.service /usr/local/bin/gh-runnerd /usr/local/bin/gh-runnerd-guest
+sudo rm -rf /etc/gh-runnerd /var/lib/gh-runnerd
+```
+
+(Portable mode: just delete the folder.)
+
+## How it works
 
 ```text
 Ubuntu host
-└── gh-runnerd
-    └── disposable Ubuntu 24.04 VM
+└── gh-runnerd (daemon)
+    └── disposable Ubuntu 24.04 VM   ← created per job, destroyed after
         ├── GitHub Actions Runner (official)
         ├── Docker Engine + Compose
         └── job container (any image)   # only if the workflow sets container:
 ```
 
-gh-runnerd does **not** reimplement GitHub's job container runtime. The official runner inside the VM runs `docker pull`, job containers, sibling container actions, and `services:`.
+- `runs-on: gh-runnerd` picks your infrastructure; `container.image` picks the job's Linux environment.
+- Jobs **never** touch the host: no host shell, no host `docker.sock`.
+- The VM is minimal Ubuntu + Docker + the official runner — not a clone of GitHub's `ubuntu-latest` (no preinstalled Node/Python/browsers; install what you need in the job or bake a custom image with a [Runnerfile](docs/runner-images.md)).
+- An embedded pull-only registry on an isolated bridge caches container images, so repeated `docker pull`s are instant and local images work: `gh-runnerd image import ./my-ci.tar --name my-ci --tag 1.0`, then `container: image: gh-runnerd.local/my-ci:1.0`.
 
-## Five minutes to a green check
-
-Host: Ubuntu 24.04+ with KVM.
-
-```bash
-sudo apt install -y qemu-system-x86 qemu-utils qemu-guest-agent iptables cloud-image-utils curl git make golang-go genisoimage
-git clone https://github.com/RefireLab/gh-runnerd
-cd gh-runnerd
-make build
-
-# data dir + internal CA + starter config
-./bin/gh-runnerd init --token "$GITHUB_TOKEN" --owner YOUR_ORG --repo YOUR_REPO --with-examples
-
-# bake the Ubuntu 24.04 runner VM (needs KVM and several minutes)
-make runner-image
-./bin/gh-runnerd runner-image import ./images/runner/ubuntu-24.04-amd64.qcow2 --name ubuntu-24.04-amd64
-./bin/gh-runnerd runner-image activate ubuntu-24.04-amd64
-
-./bin/gh-runnerd doctor
-./bin/gh-runnerd serve --config ./gh-runnerd.toml
-```
-
-Workflow:
-
-```yaml
-jobs:
-  test:
-    runs-on: gh-runnerd
-    steps:
-      - uses: actions/checkout@v4
-      - run: uname -a
-```
-
-With a job container (any registry, including Alpine / Node / your own):
-
-```yaml
-jobs:
-  test:
-    runs-on: gh-runnerd
-    container:
-      image: alpine:3.22
-    steps:
-      - run: apk add --no-cache git curl
-      - run: uname -a
-```
-
-More: [docs/install.md](docs/install.md), [docs/github-app.md](docs/github-app.md), [examples/workflows](examples/workflows).
-
-## What this is not
-
-- Not a clone of GitHub-hosted `ubuntu-latest` (no Node/Python/Java/browsers preinstalled in the VM).
-- Not an Alpine-based runner OS. GitHub's self-hosted runner targets glibc distros; Alpine is for `container:`.
-- Not Docker-on-the-host. Jobs never run on the Ubuntu host and never get the host `docker.sock`.
-
-## Local images
-
-```bash
-./bin/gh-runnerd image import ./imports/my-ci.tar --name my-ci --tag 2026.08
-```
-
-```yaml
-container:
-  image: gh-runnerd.local/my-ci:2026.08
-```
-
-The VM's Docker daemon pulls from an embedded pull-only registry bound only to the isolated bridge (`10.87.0.1:443`). There is no public host port.
+More detail: [docs/install.md](docs/install.md) · [docs/architecture.md](docs/architecture.md) · [docs/github-app.md](docs/github-app.md) · [examples/workflows](examples/workflows)
 
 ## License
 
