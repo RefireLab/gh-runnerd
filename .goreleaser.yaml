@@ -5,6 +5,8 @@ project_name: gh-runnerd
 before:
   hooks:
     - go mod tidy
+    # Stamp the release version into the README shipped inside the archives.
+    - ./scripts/release-readme.sh {{ .Version }}
 
 builds:
   - id: gh-runnerd
@@ -42,7 +44,8 @@ archives:
     name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
     files:
       - LICENSE
-      - README.md
+      - src: .release/README.md
+        dst: README.md
 
 checksum:
   name_template: "{{ .ProjectName }}_{{ .Version }}_checksums.txt"

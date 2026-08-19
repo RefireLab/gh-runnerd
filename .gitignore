@@ -1,5 +1,6 @@
 /bin/
 /dist/
+/.release/
 /gh-runnerd-data/
 *.qcow2
 *.qcow2.tmp
