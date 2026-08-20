@@ -11,7 +11,8 @@ gh-runnerd doctor
 | `only runs on Ubuntu` | Host is not Ubuntu 24.04+. |
 | `/dev/kvm missing` | Install qemu, enable VT-x/AMD-V, add user/device permissions. |
 | `qemu-system-* not in PATH` | `apt install qemu-system-x86` (or `qemu-system-arm`). |
-| `no Ubuntu 24.04 runner image` | `sudo gh-runnerd runner-image bake` (builds, imports, and activates it). |
+| `no runner image` / template missing | `sudo gh-runnerd runner-image bake` (builds, imports, and activates it). |
+| Bake times out with an empty console | `/dev/kvm` exists but guests never run (broken nested virtualization). The error names it; retry with `GH_RUNNERD_BAKE_ACCEL=tcg` (slow) or bake on a host with working KVM. |
 | `github-auth` error | Set `github.token` or App id/key/installation. |
 | Job sits queued | Labels don't include `gh-runnerd`; webhook not reaching host and poll repo not set; pool at `max_concurrent`; JIT failed (check daemon logs). |
 | `guest agent did not connect` | VM didn't boot in `vm.boot_timeout`; golden image missing guest unit; bridge/DHCP broken; host has no `/dev/vsock` (guest then hangs on vsock and never reaches TCP `host_ip:5099`). |

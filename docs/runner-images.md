@@ -59,6 +59,22 @@ sudo gh-runnerd runner-image update      # re-bake: newest cloud image + newest 
 
 `validate` checks the file exists, SHA-256 matches the catalog MANIFEST, and `qemu-img info` recognizes a disk. Live boot validation is the bake process itself.
 
+## How mirroring GitHub's images works
+
+There is no fork of upstream to maintain and nothing hardcoded per tool:
+
+1. `bake` resolves the newest **stable release tag** of `actions/runner-images` for your image and architecture (e.g. `ubuntu24/20260810.271`; prereleases are skipped) and downloads that exact source snapshot.
+2. It parses GitHub's own Packer template (`images/ubuntu/templates/build.ubuntu-24_04.pkr.hcl`) to get the ordered list of build scripts, their environment variables, and which ones run under PowerShell — so when upstream adds or reorders a tool, the next `runner-image update` simply follows.
+3. Inside the bake VM it recreates the layout those scripts expect (`/imagegeneration` with helpers, installers, `toolset.json`, tests, post-generation hooks), shims the one Azure-ism (`/etc/waagent.conf`), and runs the scripts in order — each with its own log under `/imagegeneration/logs/`.
+4. GitHub's *post-generation* scripts (the ones hosted VMs run at first boot) run once at the end, so `/etc/environment` carries `ImageOS`, `RUNNER_TOOL_CACHE=/opt/hostedtoolcache`, and the full `PATH` — `actions/setup-node`, `setup-python`, and friends find the toolcache exactly like on GitHub.
+5. The gh-runnerd base install runs **after** the upstream scripts, so the guest agent, registry trust, and Docker mirror config always win.
+
+The `essential` flavor is the same pipeline with a curated allowlist of upstream scripts; `full` runs them all.
+
+## Runnerfile + flavors
+
+The two compose: the flavor from the config is baked first, then `RUN` lines. So a `Runnerfile` on top of `[image] flavor = "essential"` starts from the full essential toolset.
+
 ## Runnerfile
 
 ```dockerfile

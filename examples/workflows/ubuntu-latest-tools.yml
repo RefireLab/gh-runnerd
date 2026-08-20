@@ -1,0 +1,24 @@
+# Uses the ubuntu-latest toolset natively in the VM — no job container.
+# Needs an image baked with the essential (or full) flavor:
+#   sudo gh-runnerd runner-image bake --image ubuntu-24.04 --flavor essential
+name: ubuntu-latest-tools
+on: [push]
+jobs:
+  tools:
+    runs-on: gh-runnerd
+    steps:
+      - uses: actions/checkout@v4
+      - run: |
+          set -euo pipefail
+          git --version
+          gh --version
+          node --version
+          python3 --version
+          cmake --version
+          yq --version
+      # setup-* actions find the toolcache at /opt/hostedtoolcache,
+      # exactly like on GitHub-hosted runners.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: node --version

@@ -1,15 +1,15 @@
 # Local registry and cache
 
-`images/` is owned by gh-runnerd. Drop tarballs in `imports/` and run CLI commands.
+Every VM's `docker pull` goes through an embedded, pull-only OCI registry on the isolated bridge. Public images are cached once on the host and served instantly to every job after that (bye, Docker Hub rate limits); your own images can be pinned from tarballs and pulled as `gh-runnerd.local/...` without any external registry.
 
 ```bash
-./bin/gh-runnerd image list
-./bin/gh-runnerd image pull alpine:3.22
-./bin/gh-runnerd image import ./imports/my-ci.tar --name my-ci --tag 2026.08
-./bin/gh-runnerd image add alpine alpine:3.22
-./bin/gh-runnerd image inspect my-ci:2026.08
-./bin/gh-runnerd image remove my-ci:2026.08
-./bin/gh-runnerd image prune --dry-run
+gh-runnerd image list
+gh-runnerd image pull alpine:3.22                                  # pre-seed the cache
+gh-runnerd image import ./imports/my-ci.tar --name my-ci --tag 2026.08
+gh-runnerd image add alpine alpine:3.22                            # pull + pin under a local name
+gh-runnerd image inspect my-ci:2026.08
+gh-runnerd image remove my-ci:2026.08
+gh-runnerd image prune --dry-run
 ```
 
 Import accepts `docker save` archives and OCI layout tarballs. Result:
