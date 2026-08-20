@@ -24,9 +24,13 @@ tar -xzf gh-runnerd_*.tar.gz
 sudo ./gh-runnerd init
 ```
 
-> No `gh` CLI? Use plain curl:
-> `curl -fsSL https://raw.githubusercontent.com/RefireLab/gh-runnerd/main/scripts/install-binary.sh | sudo bash`
-> (installs the binaries into `/usr/local/bin`, then run `sudo gh-runnerd init`)
+### Without the GitHub CLI
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/RefireLab/gh-runnerd/main/scripts/install-binary.sh | sudo bash
+```
+
+This installs the binaries into `/usr/local/bin`. Then run `sudo gh-runnerd init`.
 
 That's it. `init` is a wizard that walks you through everything:
 
@@ -117,4 +121,4 @@ More detail: [docs/install.md](docs/install.md) · [docs/architecture.md](docs/a
 
 ## License
 
-MIT
+MIT. Built by [Refire Lab](https://refirelab.com/).
