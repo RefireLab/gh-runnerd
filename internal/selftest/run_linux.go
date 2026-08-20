@@ -39,6 +39,11 @@ func Run(o Options) Report {
 	if os.Geteuid() != 0 {
 		return Report{Steps: []Step{{Name: "setup", Status: Skip, Detail: "egress probe needs root"}}}
 	}
+	unlock, err := acquireLock()
+	if err != nil {
+		return Report{Steps: []Step{{Name: "setup", Status: Skip, Detail: "another egress probe is running (serve and doctor overlap): " + err.Error()}}}
+	}
+	defer unlock()
 
 	cleanup := func() {
 		_ = ipCmd("netns", "del", nsName)
@@ -64,9 +69,12 @@ func Run(o Options) Report {
 	var rep Report
 	add := func(s Step) { rep.Steps = append(rep.Steps, s) }
 
-	// DHCP first, from an interface with no IP — exactly like a booting VM.
-	if o.DHCP != nil {
-		mac, _ := net.ParseMAC(probeMAC)
+	// DHCP phase A: broadcast discover from an interface with no IP —
+	// exactly like a booting VM.
+	var bcastErr error
+	probing := o.DHCP != nil
+	mac, _ := net.ParseMAC(probeMAC)
+	if probing {
 		o.DHCP.Set(netbridge.Lease{
 			MAC:    probeMAC,
 			IP:     ip,
@@ -74,12 +82,11 @@ func Run(o Options) Report {
 			Router: net.ParseIP(o.HostIP).To4(),
 		})
 		defer o.DHCP.Delete(probeMAC)
-		step := Step{Name: "dhcp", Status: OK, Detail: fmt.Sprintf("offer %s on %s", ip, o.Bridge)}
-		if err := inNS(func() error { return dhcpProbe(mac, ip, o.Timeout) }); err != nil {
-			step = Step{Name: "dhcp", Status: Fail, Detail: err.Error(),
-				Fix: "no DHCP answer on the bridge — check that nothing else binds :67 (ss -ulpn 'sport = :67') and restart serve"}
+		bcastErr = inNS(func() error { return dhcpProbe(mac, ip, phaseBudget(o.Timeout)) })
+		if bcastErr == nil {
+			add(Step{Name: "dhcp", Status: OK, Detail: fmt.Sprintf("offer %s on %s", ip, o.Bridge)})
+			probing = false
 		}
-		add(step)
 	}
 
 	if err := ipCmd("-n", nsName, "addr", "add", fmt.Sprintf("%s/%d", ip, prefix), "dev", vethNS); err != nil {
@@ -89,6 +96,22 @@ func Run(o Options) Report {
 	if err := ipCmd("-n", nsName, "route", "add", "default", "via", o.HostIP); err != nil {
 		add(Step{Name: "setup", Status: Skip, Detail: err.Error()})
 		return rep
+	}
+
+	// DHCP phase B: the same discover from the configured address. The
+	// server answers unicast, which some kernels deliver even when a
+	// locally-generated broadcast never reaches bridge ports. Real VM
+	// clients read raw sockets and take either frame, so a phase-B-only
+	// pass still means working DHCP.
+	if probing {
+		if err := inNS(func() error { return dhcpProbe(mac, ip, phaseBudget(o.Timeout)) }); err == nil {
+			add(Step{Name: "dhcp", Status: OK,
+				Detail: fmt.Sprintf("offer %s on %s (unicast; broadcast replies are lost on this host: %v)", ip, o.Bridge, bcastErr)})
+		} else {
+			add(Step{Name: "dhcp", Status: Fail,
+				Detail: fmt.Sprintf("broadcast: %v; unicast: %v", bcastErr, err),
+				Fix:    "no DHCP answer on the bridge — check that nothing else binds :67 (ss -ulpn 'sport = :67') and restart serve"})
+		}
 	}
 
 	if o.Control {
@@ -223,4 +246,36 @@ func ipCmd(args ...string) error {
 		return fmt.Errorf("ip %s: %s (%w)", strings.Join(args, " "), strings.TrimSpace(string(out)), err)
 	}
 	return nil
+}
+
+// phaseBudget splits the total probe timeout between the broadcast and
+// unicast DHCP phases, never dropping below a workable floor.
+func phaseBudget(total time.Duration) time.Duration {
+	b := total / 2
+	if b < 2*time.Second {
+		b = 2 * time.Second
+	}
+	return b
+}
+
+// acquireLock serializes probes across processes: serve retries every
+// poll interval while doctor may run the same probe with the same netns
+// and veth names; unsynchronized they tear down each other's namespace
+// mid-run.
+func acquireLock() (func(), error) {
+	if err := os.MkdirAll("/run/gh-runnerd", 0o755); err != nil {
+		return nil, err
+	}
+	f, err := os.OpenFile("/run/gh-runnerd/selftest.lock", os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		return nil, err
+	}
+	if err := unix.Flock(int(f.Fd()), unix.LOCK_EX|unix.LOCK_NB); err != nil {
+		f.Close()
+		return nil, fmt.Errorf("selftest lock: %w", err)
+	}
+	return func() {
+		_ = unix.Flock(int(f.Fd()), unix.LOCK_UN)
+		f.Close()
+	}, nil
 }
