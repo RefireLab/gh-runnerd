@@ -202,6 +202,9 @@ func (c *Config) applyEnv() {
 
 // Validate checks semantically required fields that are always needed.
 func (c Config) Validate() error {
+	if err := c.validateCleanStrings(); err != nil {
+		return err
+	}
 	if c.Pool.MaxConcurrent < 1 {
 		return fmt.Errorf("pool.max_concurrent must be >= 1")
 	}
@@ -245,6 +248,42 @@ func (c Config) Validate() error {
 		// Custom names are allowed once imported; the shipped template is ubuntu-24.04.
 	}
 	return nil
+}
+
+// validateCleanStrings rejects control characters in identity fields.
+// Terminal escape codes (arrow keys pressed in an old init wizard) used
+// to be recorded verbatim and then broke every GitHub URL built from the
+// value, failing at runtime instead of at load.
+func (c Config) validateCleanStrings() error {
+	fields := []struct{ name, value string }{
+		{"github.base_url", c.GitHub.BaseURL},
+		{"github.owner", c.GitHub.Owner},
+		{"github.repo", c.GitHub.Repo},
+		{"github.org", c.GitHub.Org},
+		{"runner.name_prefix", c.Runner.NamePrefix},
+		{"vm.template", c.VM.Template},
+	}
+	for i, r := range c.GitHub.PollRepos {
+		fields = append(fields, struct{ name, value string }{fmt.Sprintf("github.poll_repos[%d]", i), r})
+	}
+	for i, l := range c.Runner.Labels {
+		fields = append(fields, struct{ name, value string }{fmt.Sprintf("runner.labels[%d]", i), l})
+	}
+	for _, f := range fields {
+		if hasControlChars(f.value) {
+			return fmt.Errorf("%s contains control characters (arrow-key escape codes recorded by an older init wizard) — re-run sudo gh-runnerd init or fix the value: %q", f.name, f.value)
+		}
+	}
+	return nil
+}
+
+func hasControlChars(s string) bool {
+	for _, r := range s {
+		if r < 0x20 || r == 0x7f {
+			return true
+		}
+	}
+	return false
 }
 
 // Layout returns the data-directory map for this config.

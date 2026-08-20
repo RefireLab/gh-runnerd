@@ -26,6 +26,9 @@ func TestSetupCommandsStayOnInternalBridge(t *testing.T) {
 	if !strings.Contains(joined, "sysctl -w net.ipv4.ip_forward=1") {
 		t.Fatal("serve must enable ip_forward so VMs can NAT")
 	}
+	if !strings.Contains(joined, "-o br-ghrunnerd -p udp --dport 68 -j CHECKSUM --checksum-fill") {
+		t.Fatal("dhcp replies need their UDP checksum filled or guests drop them")
+	}
 	if !strings.Contains(joined, "-i br-ghrunnerd ! -o br-ghrunnerd -j ACCEPT") {
 		t.Fatal("VMs must be allowed off the bridge (Docker sets FORWARD DROP)")
 	}

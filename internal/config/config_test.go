@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -48,6 +49,29 @@ func TestValidateRejectsBadPool(t *testing.T) {
 	cfg.Pool.MaxConcurrent = 2
 	if err := cfg.Validate(); err == nil {
 		t.Fatal("expected error")
+	}
+}
+
+func TestValidateRejectsControlCharacters(t *testing.T) {
+	t.Parallel()
+	cfg := Defaults()
+	cfg.GitHub.PollRepos = []string{"RefireLab/pitstop-ae\x1b[D\x1b[D"}
+	err := cfg.Validate()
+	if err == nil {
+		t.Fatal("escape codes in poll_repos must be rejected")
+	}
+	if !strings.Contains(err.Error(), "github.poll_repos[0]") {
+		t.Fatalf("error must name the field: %v", err)
+	}
+	cfg = Defaults()
+	cfg.Runner.Labels = []string{"gh-runnerd", "bad\x1blabel"}
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("escape codes in labels must be rejected")
+	}
+	cfg = Defaults()
+	cfg.GitHub.Org = "Refire\x7fLab"
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("control characters in org must be rejected")
 	}
 }
 

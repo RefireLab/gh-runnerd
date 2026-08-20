@@ -61,7 +61,40 @@ func (p *Prompter) readLine() (string, error) {
 	if err != nil && line == "" {
 		return "", err
 	}
-	return strings.TrimSpace(line), nil
+	return sanitizeInput(line), nil
+}
+
+// sanitizeInput strips ANSI escape sequences and control characters from
+// raw terminal input. Without a line editor, arrow keys arrive as ESC[D
+// and similar byte sequences; recorded verbatim they poison the config
+// (e.g. a poll_repos entry that breaks every GitHub URL built from it).
+func sanitizeInput(s string) string {
+	var b strings.Builder
+	for i := 0; i < len(s); {
+		c := s[i]
+		if c == 0x1b {
+			i++
+			if i < len(s) && (s[i] == '[' || s[i] == 'O') {
+				i++
+				for i < len(s) {
+					// CSI: parameter/intermediate bytes, then one final byte.
+					done := s[i] >= 0x40 && s[i] <= 0x7e
+					i++
+					if done {
+						break
+					}
+				}
+			}
+			continue
+		}
+		if c < 0x20 || c == 0x7f {
+			i++
+			continue
+		}
+		b.WriteByte(c)
+		i++
+	}
+	return strings.TrimSpace(b.String())
 }
 
 // Ask prompts for a free-form answer; empty input returns def.
@@ -131,7 +164,7 @@ func (p *Prompter) AskSecret(label string) (string, error) {
 		if err != nil {
 			return "", err
 		}
-		return strings.TrimSpace(string(raw)), nil
+		return sanitizeInput(string(raw)), nil
 	}
 	return p.readLine()
 }

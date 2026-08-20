@@ -112,12 +112,13 @@ func (d *DHCP) ListenAndServe(iface string) error {
 		}
 		offered := net.IP(resp[16:20])
 		mac := net.HardwareAddr(resp[28:34])
+		kind := replyTypeName(resp)
 		if src != nil && !src.IP.IsUnspecified() && !src.IP.Equal(net.IPv4zero) {
 			dst := &net.UDPAddr{IP: src.IP, Port: 68}
 			if _, err := conn.WriteToUDP(resp, dst); err != nil && d.log != nil {
-				d.log.Warn("dhcp reply", "dst", dst.String(), "err", err)
+				d.log.Warn("dhcp reply", "type", kind, "dst", dst.String(), "err", err)
 			} else if d.log != nil {
-				d.log.Info("dhcp reply", "ip", offered.String(), "mac", mac.String())
+				d.log.Info("dhcp reply", "type", kind, "ip", offered.String(), "mac", mac.String())
 			}
 			continue
 		}
@@ -136,12 +137,25 @@ func (d *DHCP) ListenAndServe(iface string) error {
 		}
 		if d.log != nil {
 			if bcastErr != nil && uniErr != nil {
-				d.log.Warn("dhcp reply failed", "ip", offered.String(), "mac", mac.String(), "bcast_err", bcastErr, "unicast_err", uniErr)
+				d.log.Warn("dhcp reply failed", "type", kind, "ip", offered.String(), "mac", mac.String(), "bcast_err", bcastErr, "unicast_err", uniErr)
 			} else {
-				d.log.Info("dhcp reply", "ip", offered.String(), "mac", mac.String())
+				d.log.Info("dhcp reply", "type", kind, "ip", offered.String(), "mac", mac.String())
 			}
 		}
 	}
+}
+
+// replyTypeName decodes option 53 of a reply we built (always first).
+func replyTypeName(resp []byte) string {
+	if len(resp) > 242 && resp[240] == 53 {
+		switch resp[242] {
+		case 2:
+			return "offer"
+		case 5:
+			return "ack"
+		}
+	}
+	return "reply"
 }
 
 // neighReplace pins ip→mac on iface so a unicast UDP reply reaches a
@@ -176,7 +190,7 @@ func (d *DHCP) handle(pkt []byte) ([]byte, error) {
 	if !ok {
 		return nil, fmt.Errorf("no lease for %s", net.HardwareAddr(mac))
 	}
-	msgType := byte(3) // request default -> ACK
+	reqType := byte(0)
 	opts := pkt[240:]
 	for i := 0; i < len(opts); {
 		if opts[i] == 255 {
@@ -191,11 +205,18 @@ func (d *DHCP) handle(pkt []byte) ([]byte, error) {
 		}
 		l := int(opts[i+1])
 		if opts[i] == 53 && l >= 1 && i+2 < len(opts) {
-			if opts[i+2] == 1 {
-				msgType = 2 // offer
-			}
+			reqType = opts[i+2]
 		}
 		i += 2 + l
+	}
+	var msgType byte
+	switch reqType {
+	case 1: // DISCOVER
+		msgType = 2 // OFFER
+	case 3, 8: // REQUEST, INFORM
+		msgType = 5 // ACK
+	default:
+		return nil, fmt.Errorf("dhcp message type %d ignored", reqType)
 	}
 	return buildReply(pkt, lease, msgType), nil
 }
