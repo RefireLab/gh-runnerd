@@ -114,8 +114,24 @@ func (d *Daemon) Run(ctx context.Context) error {
 
 	d.dhcp = netbridge.NewDHCP(d.Log)
 	go func() {
-		if err := d.dhcp.ListenAndServe(d.Cfg.Network.Bridge); err != nil {
-			d.Log.Warn("dhcp server", "err", err)
+		for {
+			err := d.dhcp.ListenAndServe(d.Cfg.Network.Bridge)
+			if ctx.Err() != nil {
+				return
+			}
+			holder := netbridge.WhoBindsUDP(67)
+			if holder != "" {
+				d.Log.Error("dhcp server down — VMs cannot get an IP", "err", err,
+					"holder", holder,
+					"fix", "free UDP :67 (e.g. dnsmasq: add except-interface="+d.Cfg.Network.Bridge+" or bind-interfaces) — retrying in 15s")
+			} else {
+				d.Log.Error("dhcp server down — VMs cannot get an IP", "err", err, "fix", "check ss -ulpn 'sport = :67' — retrying in 15s")
+			}
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(15 * time.Second):
+			}
 		}
 	}()
 
@@ -215,6 +231,10 @@ func (d *Daemon) runSelftest() {
 		Log:       d.Log,
 	})
 	rep.Log(d.Log)
+	if err := d.dhcp.Err(); err != nil {
+		holder := netbridge.WhoBindsUDP(67)
+		d.Log.Error("dhcp server is not running", "err", err, "holder", holder)
+	}
 	switch {
 	case rep.EgressBroken():
 		d.egress.Store("failed")
