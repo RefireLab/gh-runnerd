@@ -11,13 +11,20 @@ tar -xzf gh-runnerd_*.tar.gz
 sudo ./gh-runnerd init
 ```
 
-`init` is an interactive wizard. It checks the host, installs the QEMU packages via apt, asks for your GitHub token (and verifies it against the API), builds the runner VM image, and can register a systemd service that starts on boot. Everything below is detail for people who want to do it by hand.
+No `gh` CLI? One line, installs into `/usr/local/bin`:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/RefireLab/gh-runnerd/main/scripts/install-binary.sh | sudo bash
+```
+
+`init` is an interactive wizard. It checks the host, installs the QEMU packages via apt, asks for your GitHub token (and verifies it against the API), asks which software the runner VMs should carry ([flavors](runner-images.md)), builds the VM image, and can register a systemd service that starts on boot. Everything below is detail for people who want to do it by hand.
 
 ## Requirements
 
 - Ubuntu 24.04+ (amd64 or arm64)
 - KVM: `ls -l /dev/kvm` must exist. On a VPS this needs nested virtualization; on bare metal enable VT-x/AMD-V in BIOS.
-- ~10 GB free disk, outbound HTTPS.
+- Free disk: ~10 GB for the default `minimal` image; ~30 GB for `essential`; ~130 GB for `full` (the bake checks before starting).
+- Outbound HTTPS.
 
 Nested virt is **not** required for job *containers* (they use the VM kernel). It is only the host that needs KVM.
 
@@ -32,10 +39,10 @@ sudo apt-get install -y qemu-system-x86 qemu-utils cloud-image-utils iptables
 
 The daemon is two static Linux binaries: `gh-runnerd` (host) and `gh-runnerd-guest` (baked into the VM). Keep them in the same directory.
 
-From [GitHub Releases](https://github.com/RefireLab/gh-runnerd/releases):
+From [GitHub Releases](https://github.com/RefireLab/gh-runnerd/releases) (replace the version with the [latest](https://github.com/RefireLab/gh-runnerd/releases/latest)):
 
 ```bash
-VERSION=0.2.6
+VERSION=0.4.0
 ARCH=amd64   # or arm64
 curl -fL -o gh-runnerd.tar.gz \
   "https://github.com/RefireLab/gh-runnerd/releases/download/v${VERSION}/gh-runnerd_${VERSION}_linux_${ARCH}.tar.gz"
@@ -51,7 +58,7 @@ sha256sum -c --ignore-missing gh-runnerd_${VERSION}_checksums.txt
 Or with the GitHub CLI:
 
 ```bash
-gh release download v0.2.6 --repo RefireLab/gh-runnerd \
+gh release download --repo RefireLab/gh-runnerd \
   --pattern 'gh-runnerd_*_linux_amd64.tar.gz'   # or _arm64
 ```
 
@@ -106,8 +113,8 @@ Prefer a GitHub App for production credentials ([github-app.md](github-app.md)).
 Releases are tag-driven and built by GoReleaser in CI ([.github/workflows/release.yml](../.github/workflows/release.yml), config in [.goreleaser.yaml](../.goreleaser.yaml)):
 
 ```bash
-git tag v0.2.6
-git push origin v0.2.6
+git tag v0.4.0
+git push origin v0.4.0
 ```
 
 The workflow cross-compiles linux amd64/arm64, packs `gh-runnerd_<version>_linux_<arch>.tar.gz`, generates the checksums file and changelog, and publishes the GitHub Release. Dry-run locally without publishing:

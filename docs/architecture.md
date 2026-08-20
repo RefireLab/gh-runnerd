@@ -10,11 +10,25 @@ Ubuntu host
     │     │     (VMs dial :443 → iptables REDIRECT on the bridge)
     │     ├── guest control TCP 10.87.0.1:5099 (vsock when available)
     │     └── tiny DHCP
-    └── disposable Ubuntu 24.04 VM (overlay qcow2)
+    └── disposable Ubuntu VM (overlay qcow2; 24.04 / 26.04 / 22.04 base)
           ├── official GitHub Actions Runner (JIT, one job)
           ├── Docker Engine
+          ├── optional ubuntu-latest tooling (essential/full flavor)
           └── optional job container
 ```
+
+## Golden image
+
+`runner-image bake` boots the official Ubuntu cloud image once under
+QEMU/KVM, installs Docker, the pinned GitHub Actions runner, and the
+guest agent, then compresses and activates the qcow2. With the
+`essential` or `full` flavor it first executes the build scripts from a
+pinned release of [actions/runner-images](https://github.com/actions/runner-images)
+— parsed straight out of GitHub's own Packer template, no Packer or
+Azure involved — so the VM carries the `ubuntu-latest` toolset. Each
+runtime VM is a copy-on-write overlay of that image, never smaller than
+the image's virtual size, destroyed after one job.
+([runner-images.md](runner-images.md))
 
 ## Startup self-test
 
@@ -30,7 +44,7 @@ poll interval until it passes; `gh-runnerd status` reports `network_egress`.
 
 1. GitHub App webhook `workflow_job` / `queued` (or poll fallback).
 2. If the job requests a configured label (`gh-runnerd`), generate a JIT config.
-3. Create a copy-on-write overlay from the golden Ubuntu qcow2, attach a TAP, boot QEMU (`q35,accel=kvm`).
+3. Create a copy-on-write overlay from the golden qcow2, attach a TAP, boot QEMU (`q35,accel=kvm`).
 4. Guest agent connects, receives the JIT blob over the isolated channel, starts `./run.sh --jitconfig`.
 5. Official runner takes the job. If `container:` is set it `docker pull`s (up to 3 times) and runs steps in that container. Otherwise steps run on the Ubuntu VM.
 6. Job ends, overlay is destroyed.
@@ -49,5 +63,5 @@ poll interval until it passes; `gh-runnerd status` reports `network_egress`.
 | Layer | What | How you choose it |
 | --- | --- | --- |
 | Host OS | Ubuntu 24.04+ | install gh-runnerd here |
-| Runner VM | Ubuntu 24.04 minimal + runner + Docker | `runner-image` / Runnerfile |
+| Runner VM | Ubuntu 22.04/24.04/26.04 + runner + Docker (+ `ubuntu-latest` tools) | `runner-image bake --image ... --flavor ...` / Runnerfile |
 | Job container | anything Docker can pull | `jobs.<id>.container.image` |
