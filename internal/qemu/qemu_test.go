@@ -1,9 +1,46 @@
 package qemu
 
 import (
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 )
+
+// TestCreateOverlayNeverShrinksBacking guards against truncated runtime
+// disks: an essential/full golden image is bigger than vm.disk, and a
+// smaller overlay silently corrupts the guest filesystem.
+func TestCreateOverlayNeverShrinksBacking(t *testing.T) {
+	t.Parallel()
+	if _, err := exec.LookPath("qemu-img"); err != nil {
+		t.Skip("qemu-img not installed")
+	}
+	dir := t.TempDir()
+	backing := filepath.Join(dir, "base.qcow2")
+	if out, err := exec.Command("qemu-img", "create", "-f", "qcow2", backing, "8G").CombinedOutput(); err != nil {
+		t.Fatalf("create backing: %v: %s", err, out)
+	}
+	overlay := filepath.Join(dir, "vm.qcow2")
+	// Ask for 2G over an 8G backing: must inherit 8G, not truncate.
+	if err := CreateOverlay(backing, overlay, 2); err != nil {
+		t.Fatal(err)
+	}
+	got, err := virtualSizeGB(overlay)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != 8 {
+		t.Fatalf("overlay virtual size = %dG, want 8G (backing size)", got)
+	}
+	// Asking for more than the backing must still grow.
+	overlay2 := filepath.Join(dir, "vm2.qcow2")
+	if err := CreateOverlay(backing, overlay2, 12); err != nil {
+		t.Fatal(err)
+	}
+	if got, err = virtualSizeGB(overlay2); err != nil || got != 12 {
+		t.Fatalf("overlay2 virtual size = %dG (%v), want 12G", got, err)
+	}
+}
 
 func TestCmdLineContainsIsolationFlags(t *testing.T) {
 	t.Parallel()
