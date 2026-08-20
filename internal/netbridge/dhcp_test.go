@@ -33,6 +33,36 @@ func TestDHCPOfferForRegisteredMAC(t *testing.T) {
 	}
 }
 
+func TestDiscoverOfferRoundTrip(t *testing.T) {
+	t.Parallel()
+	d := NewDHCP(nil)
+	d.Set(Lease{
+		MAC:    "52:54:00:87:ff:fe",
+		IP:     net.ParseIP("10.87.255.254").To4(),
+		Mask:   net.CIDRMask(16, 32),
+		Router: net.ParseIP("10.87.0.1").To4(),
+	})
+	mac, _ := net.ParseMAC("52:54:00:87:ff:fe")
+	req := BuildDiscover(mac, 0xdeadbeef)
+	resp, err := d.handle(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ip, msgType, err := ParseReply(resp, 0xdeadbeef)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if msgType != 2 {
+		t.Fatalf("expected offer (2), got %d", msgType)
+	}
+	if !ip.Equal(net.ParseIP("10.87.255.254")) {
+		t.Fatalf("yiaddr %s", ip)
+	}
+	if _, _, err := ParseReply(resp, 0x1111); err == nil {
+		t.Fatal("xid mismatch must be rejected")
+	}
+}
+
 func TestDHCPUnknownMAC(t *testing.T) {
 	t.Parallel()
 	d := NewDHCP(nil)

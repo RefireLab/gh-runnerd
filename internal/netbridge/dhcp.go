@@ -1,6 +1,7 @@
 package netbridge
 
 import (
+	"context"
 	"encoding/binary"
 	"fmt"
 	"log/slog"
@@ -50,16 +51,19 @@ func (d *DHCP) lookup(mac []byte) (Lease, bool) {
 	return l, ok
 }
 
-// ListenAndServe binds UDP 67 on hostIP.
-func (d *DHCP) ListenAndServe(hostIP string) error {
-	addr, err := net.ResolveUDPAddr("udp4", hostIP+":67")
+// ListenAndServe binds UDP :67 scoped to iface (the runner bridge).
+//
+// DHCPDISCOVER arrives addressed to 255.255.255.255, which a socket bound
+// to the bridge's unicast address never receives; the reply also goes to
+// 255.255.255.255 because the client has no IP yet, which requires
+// SO_BROADCAST. Both are handled by the platform listen config.
+func (d *DHCP) ListenAndServe(iface string) error {
+	lc := net.ListenConfig{Control: dhcpControl(iface)}
+	pc, err := lc.ListenPacket(context.Background(), "udp4", ":67")
 	if err != nil {
-		return err
+		return fmt.Errorf("dhcp listen :67 on %s: %w", iface, err)
 	}
-	conn, err := net.ListenUDP("udp4", addr)
-	if err != nil {
-		return err
-	}
+	conn := pc.(*net.UDPConn)
 	d.conn = conn
 	buf := make([]byte, 1500)
 	for {
@@ -75,7 +79,11 @@ func (d *DHCP) ListenAndServe(hostIP string) error {
 		if src != nil && !src.IP.IsUnspecified() && !src.IP.Equal(net.IPv4zero) {
 			dst = &net.UDPAddr{IP: src.IP, Port: 68}
 		}
-		_, _ = conn.WriteToUDP(resp, dst)
+		if _, err := conn.WriteToUDP(resp, dst); err != nil && d.log != nil {
+			d.log.Warn("dhcp reply", "dst", dst.String(), "err", err)
+		} else if d.log != nil {
+			d.log.Info("dhcp reply", "ip", net.IP(resp[16:20]).String(), "mac", net.HardwareAddr(resp[28:34]).String())
+		}
 	}
 }
 
@@ -152,4 +160,58 @@ func normalizeMAC(s string) string {
 		return strings.ToLower(s)
 	}
 	return hw.String()
+}
+
+// BuildDiscover crafts a minimal DHCPDISCOVER, used by the network
+// self-test to probe the server end-to-end over the real bridge.
+func BuildDiscover(mac net.HardwareAddr, xid uint32) []byte {
+	pkt := make([]byte, 300)
+	pkt[0] = 1 // bootrequest
+	pkt[1] = 1 // ethernet
+	pkt[2] = 6
+	binary.BigEndian.PutUint32(pkt[4:8], xid)
+	pkt[10] = 0x80 // broadcast flag: client has no IP yet
+	copy(pkt[28:34], mac)
+	binary.BigEndian.PutUint32(pkt[236:240], 0x63825363)
+	copy(pkt[240:], []byte{53, 1, 1, 255})
+	return pkt
+}
+
+// ParseReply extracts yiaddr and the DHCP message type from a server reply
+// matching xid.
+func ParseReply(pkt []byte, xid uint32) (net.IP, byte, error) {
+	if len(pkt) < 244 {
+		return nil, 0, fmt.Errorf("short dhcp reply")
+	}
+	if pkt[0] != 2 {
+		return nil, 0, fmt.Errorf("not a bootreply")
+	}
+	if binary.BigEndian.Uint32(pkt[4:8]) != xid {
+		return nil, 0, fmt.Errorf("xid mismatch")
+	}
+	if binary.BigEndian.Uint32(pkt[236:240]) != 0x63825363 {
+		return nil, 0, fmt.Errorf("bad magic")
+	}
+	ip := make(net.IP, 4)
+	copy(ip, pkt[16:20])
+	msgType := byte(0)
+	opts := pkt[240:]
+	for i := 0; i < len(opts); {
+		if opts[i] == 255 {
+			break
+		}
+		if opts[i] == 0 {
+			i++
+			continue
+		}
+		if i+1 >= len(opts) {
+			break
+		}
+		l := int(opts[i+1])
+		if opts[i] == 53 && l >= 1 && i+2 < len(opts) {
+			msgType = opts[i+2]
+		}
+		i += 2 + l
+	}
+	return ip, msgType, nil
 }

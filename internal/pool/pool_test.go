@@ -155,6 +155,28 @@ func TestMaintainIdleKeepsWarmVMIdleAfterRunnerStarts(t *testing.T) {
 	}
 }
 
+func TestDestroyAllRemovesEveryVM(t *testing.T) {
+	cfg := config.Defaults()
+	cfg.DataDir = t.TempDir()
+	cfg.Pool.MinIdle = 2
+	_ = cfg.Layout().Ensure()
+	backend := &fakeBackend{t: t, guests: make(chan *guest.Session, 2), imagePath: filepath.Join(t.TempDir(), "b.qcow2")}
+	for i := 0; i < 2; i++ {
+		sess, peer := pipeSession(t)
+		backend.guests <- sess
+		go io.Copy(io.Discard, peer)
+	}
+	m := New(cfg, slog.Default(), backend)
+	if err := m.MaintainIdle(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	m.DestroyAll()
+	st := m.Status()
+	if len(st.VMs) != 0 || st.Idle != 0 || st.Busy != 0 || st.Booting != 0 {
+		t.Fatalf("expected empty pool after DestroyAll: %+v", st)
+	}
+}
+
 func TestPoolExhausted(t *testing.T) {
 	cfg := config.Defaults()
 	cfg.DataDir = t.TempDir()

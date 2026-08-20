@@ -298,6 +298,20 @@ func (m *Manager) finishBoot(ctx context.Context, vm *VM, labels []string) {
 	}()
 }
 
+// DestroyAll tears down every VM. Called on daemon shutdown so QEMU
+// processes and TAP devices never outlive the daemon.
+func (m *Manager) DestroyAll() {
+	m.mu.Lock()
+	var all []*VM
+	for _, vm := range m.vms {
+		all = append(all, vm)
+	}
+	m.mu.Unlock()
+	for _, vm := range all {
+		m.destroy(vm)
+	}
+}
+
 func (m *Manager) destroy(vm *VM) {
 	m.mu.Lock()
 	vm.State = StateDead

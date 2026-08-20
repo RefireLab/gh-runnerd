@@ -9,7 +9,10 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/RefireLab/gh-runnerd/internal/config"
@@ -22,6 +25,7 @@ import (
 	"github.com/RefireLab/gh-runnerd/internal/pool"
 	"github.com/RefireLab/gh-runnerd/internal/qemu"
 	"github.com/RefireLab/gh-runnerd/internal/registry"
+	"github.com/RefireLab/gh-runnerd/internal/selftest"
 	"github.com/RefireLab/gh-runnerd/internal/tlsutil"
 	"github.com/RefireLab/gh-runnerd/internal/version"
 )
@@ -35,6 +39,10 @@ type Daemon struct {
 	host    *guest.Host
 	dhcp    *netbridge.DHCP
 	vsockOK bool
+	// egress is "ok", "failed", or "unknown" (probe skipped). Runners are
+	// held back only on "failed": booting them would register Offline
+	// garbage in GitHub.
+	egress atomic.Value
 }
 
 func New(cfg config.Config, log *slog.Logger) *Daemon {
@@ -106,7 +114,7 @@ func (d *Daemon) Run(ctx context.Context) error {
 
 	d.dhcp = netbridge.NewDHCP(d.Log)
 	go func() {
-		if err := d.dhcp.ListenAndServe(d.Cfg.Network.HostIP); err != nil {
+		if err := d.dhcp.ListenAndServe(d.Cfg.Network.Bridge); err != nil {
 			d.Log.Warn("dhcp server", "err", err)
 		}
 	}()
@@ -147,27 +155,108 @@ func (d *Daemon) Run(ctx context.Context) error {
 	statusTick := time.NewTicker(3 * time.Second)
 	defer statusTick.Stop()
 
-	if err := d.pool.MaintainIdle(ctx); err != nil {
-		d.Log.Warn("warm pool", "err", err)
+	d.cleanupOrphans()
+	d.runSelftest()
+
+	if d.egressState() != "failed" {
+		if err := d.pool.MaintainIdle(ctx); err != nil {
+			d.Log.Warn("warm pool", "err", err)
+		}
 	}
 
-	d.Log.Info("gh-runnerd running", "version", version.Version, "labels", d.Cfg.Runner.Labels)
+	d.Log.Info("gh-runnerd running", "version", version.Version, "labels", d.Cfg.Runner.Labels, "egress", d.egressState())
 
 	for {
 		select {
 		case <-ctx.Done():
+			d.Log.Info("shutting down: destroying pool VMs")
+			d.pool.DestroyAll()
 			_ = wh.Shutdown(context.Background())
 			_ = regSrv.Shutdown(context.Background())
 			_ = d.host.Close()
 			_ = d.dhcp.Close()
 			return nil
 		case <-ticker.C:
+			if d.egressState() == "failed" {
+				d.runSelftest()
+				if d.egressState() == "failed" {
+					continue
+				}
+				d.Log.Info("egress restored — starting runners")
+			}
 			d.poll(ctx)
 			if err := d.pool.MaintainIdle(ctx); err != nil {
 				d.Log.Warn("maintain idle", "err", err)
 			}
 		case <-statusTick.C:
 			d.writeStatus()
+		}
+	}
+}
+
+func (d *Daemon) egressState() string {
+	if v, ok := d.egress.Load().(string); ok {
+		return v
+	}
+	return "unknown"
+}
+
+// runSelftest probes the VM datapath (DHCP, control port, DNS, TCP 443)
+// through a namespace attached to the real bridge, then gates runner
+// creation on the result so broken networking cannot mint Offline runners.
+func (d *Daemon) runSelftest() {
+	rep := selftest.Run(selftest.Options{
+		Bridge:    d.Cfg.Network.Bridge,
+		CIDR:      d.Cfg.Network.CIDR,
+		HostIP:    d.Cfg.Network.HostIP,
+		GuestPort: d.Cfg.Network.GuestPort,
+		DHCP:      d.dhcp,
+		Control:   true,
+		Log:       d.Log,
+	})
+	rep.Log(d.Log)
+	switch {
+	case rep.EgressBroken():
+		d.egress.Store("failed")
+		d.Log.Error("VMs cannot reach the internet — runners would register Offline in GitHub",
+			"failed", strings.Join(rep.FailedSteps(), ","),
+			"action", "runner creation paused; fixes above; retrying automatically")
+	case len(rep.Steps) > 0 && rep.Steps[0].Status == selftest.Skip:
+		d.egress.Store("unknown")
+	default:
+		d.egress.Store("ok")
+	}
+}
+
+// cleanupOrphans removes leftovers from a previous daemon that was killed
+// without a graceful stop: runner QEMU processes (they hold the TAPs and
+// cause "Device or resource busy"), stale tap devices, and overlay disks.
+func (d *Daemon) cleanupOrphans() {
+	pattern := fmt.Sprintf(`qemu-system\S* .*-name %s-[0-9]+-[0-9]+`, d.Cfg.Runner.NamePrefix)
+	if out, err := exec.Command("pgrep", "-af", pattern).Output(); err == nil && len(out) > 0 {
+		lines := strings.Split(strings.TrimSpace(string(out)), "\n")
+		d.Log.Info("killing orphan runner VMs from a previous run", "count", len(lines))
+		_ = exec.Command("pkill", "-TERM", "-f", pattern).Run()
+		deadline := time.Now().Add(8 * time.Second)
+		for time.Now().Before(deadline) {
+			if err := exec.Command("pgrep", "-f", pattern).Run(); err != nil {
+				break
+			}
+			time.Sleep(500 * time.Millisecond)
+		}
+		_ = exec.Command("pkill", "-KILL", "-f", pattern).Run()
+	}
+	taps, _ := filepath.Glob("/sys/class/net/tap-ghrd*")
+	for _, p := range taps {
+		tap := filepath.Base(p)
+		if err := netbridge.DeleteTAP(tap); err == nil {
+			d.Log.Info("removed stale tap", "tap", tap)
+		}
+	}
+	overlays, _ := filepath.Glob(filepath.Join(d.Cfg.Layout().Runtime, "*.qcow2"))
+	for _, p := range overlays {
+		if err := os.Remove(p); err == nil {
+			d.Log.Info("removed stale overlay", "path", p)
 		}
 	}
 }
@@ -197,6 +286,10 @@ func (d *Daemon) handleWebhook(w http.ResponseWriter, r *http.Request) {
 	if action != "queued" || d.pool == nil {
 		return
 	}
+	if d.egressState() == "failed" {
+		d.Log.Warn("job deferred: VM egress is broken; it will be picked up by polling once fixed", "job", job.ID)
+		return
+	}
 	go func() {
 		if err := d.pool.HandleQueuedJob(context.Background(), job); err != nil {
 			d.Log.Error("handle queued job", "job", job.ID, "err", err)
@@ -220,9 +313,10 @@ func (d *Daemon) poll(ctx context.Context) {
 func (d *Daemon) writeStatus() {
 	st := struct {
 		Version string      `json:"version"`
+		Egress  string      `json:"network_egress"`
 		Pool    pool.Status `json:"pool"`
 		Time    time.Time   `json:"time"`
-	}{Version: version.Version, Pool: d.pool.Status(), Time: time.Now().UTC()}
+	}{Version: version.Version, Egress: d.egressState(), Pool: d.pool.Status(), Time: time.Now().UTC()}
 	raw, _ := json.MarshalIndent(st, "", "  ")
 	_ = os.WriteFile(d.Cfg.Layout().StatusFile(), raw, 0o600)
 }

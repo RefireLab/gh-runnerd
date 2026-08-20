@@ -15,6 +15,13 @@ func TestInstallScriptContent(t *testing.T) {
 		"get.docker.com",
 		"gh-runnerd-guest.service",
 		"touch \"$SEED/BAKE_OK\"",
+		// Runtime NICs sit in a different PCI slot with a different MAC
+		// than during bake, so the image must DHCP on any en* interface.
+		"rm -f /etc/netplan/50-cloud-init.yaml",
+		"/etc/netplan/50-gh-runnerd.yaml",
+		"match:\n        name: \"en*\"",
+		"dhcp4: true",
+		"optional: true",
 	} {
 		if !strings.Contains(s, want) {
 			t.Fatalf("install script missing %q:\n%s", want, s)
