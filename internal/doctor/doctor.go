@@ -70,6 +70,11 @@ func Run(cfg config.Config) Report {
 	} else {
 		add(Check{"kvm", Error, "/dev/kvm missing — install qemu-system and enable virtualization"})
 	}
+	if qemu.HostVsockAvailable() {
+		add(Check{"vsock", OK, "/dev/vsock present"})
+	} else {
+		add(Check{"vsock", Warn, "/dev/vsock missing — guest control uses TCP on the isolated bridge"})
+	}
 
 	bin := qemu.DefaultBinary()
 	if p, err := exec.LookPath(bin); err == nil {

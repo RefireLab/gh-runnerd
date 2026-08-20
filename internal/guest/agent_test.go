@@ -1,7 +1,9 @@
 package guest
 
 import (
+	"errors"
 	"net"
+	"strconv"
 	"testing"
 	"time"
 )
@@ -53,5 +55,61 @@ func TestAgentReceivesJITAndReportsFinish(t *testing.T) {
 	}
 	if err := <-done; err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestWithTimeoutAbandonsHangingDial(t *testing.T) {
+	t.Parallel()
+	started := time.Now()
+	_, err := withTimeout(80*time.Millisecond, func() (net.Conn, error) {
+		time.Sleep(2 * time.Second)
+		return nil, errors.New("late")
+	})
+	if err == nil {
+		t.Fatal("expected timeout error")
+	}
+	if elapsed := time.Since(started); elapsed > 500*time.Millisecond {
+		t.Fatalf("timed out too slowly: %s", elapsed)
+	}
+}
+
+func TestDialHostFallsBackToTCPWhenVsockHangs(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = ln.Close() })
+	go func() {
+		c, err := ln.Accept()
+		if err != nil {
+			return
+		}
+		_ = c.Close()
+	}()
+
+	_, portStr, err := net.SplitHostPort(ln.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, err := strconv.Atoi(portStr)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	old := vsockDial
+	t.Cleanup(func() { vsockDial = old })
+	vsockDial = func(uint32, uint32, time.Duration) (net.Conn, error) {
+		time.Sleep(2 * time.Second)
+		return nil, errors.New("vsock hung")
+	}
+
+	started := time.Now()
+	c, err := dialHost("127.0.0.1", p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = c.Close()
+	if elapsed := time.Since(started); elapsed > 500*time.Millisecond {
+		t.Fatalf("TCP fallback waited on vsock: %s", elapsed)
 	}
 }

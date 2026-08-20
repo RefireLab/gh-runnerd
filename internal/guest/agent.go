@@ -6,8 +6,6 @@ import (
 	"os"
 	"os/exec"
 	"time"
-
-	"github.com/mdlayher/vsock"
 )
 
 // AgentConfig is the in-VM guest agent.
@@ -40,10 +38,7 @@ func defaults(cfg AgentConfig) AgentConfig {
 	}
 	if cfg.Dial == nil {
 		cfg.Dial = func() (net.Conn, error) {
-			if c, err := vsock.Dial(2, uint32(cfg.Port), nil); err == nil {
-				return c, nil
-			}
-			return net.DialTimeout("tcp", net.JoinHostPort(cfg.HostIP, fmt.Sprintf("%d", cfg.Port)), 5*time.Second)
+			return dialHost(cfg.HostIP, cfg.Port)
 		}
 	}
 	if cfg.RunnerStart == nil {

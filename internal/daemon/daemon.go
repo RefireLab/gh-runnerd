@@ -28,12 +28,13 @@ import (
 
 // Daemon is the long-running gh-runnerd process.
 type Daemon struct {
-	Cfg    config.Config
-	Log    *slog.Logger
-	client *ghapi.Client
-	pool   *pool.Manager
-	host   *guest.Host
-	dhcp   *netbridge.DHCP
+	Cfg     config.Config
+	Log     *slog.Logger
+	client  *ghapi.Client
+	pool    *pool.Manager
+	host    *guest.Host
+	dhcp    *netbridge.DHCP
+	vsockOK bool
 }
 
 func New(cfg config.Config, log *slog.Logger) *Daemon {
@@ -116,6 +117,8 @@ func (d *Daemon) Run(ctx context.Context) error {
 	}
 	if err := d.host.ListenVsock(uint32(d.Cfg.Network.GuestPort)); err != nil {
 		d.Log.Warn("vsock listen failed, using TCP on the isolated bridge only", "err", err)
+	} else {
+		d.vsockOK = true
 	}
 
 	d.client = ghapi.New(d.Cfg.GitHub)
@@ -233,6 +236,9 @@ func (b *liveBackend) GenerateJIT(ctx context.Context, name string, labels []str
 }
 
 func (b *liveBackend) StartVM(ctx context.Context, spec qemu.Spec) (*qemu.Instance, error) {
+	if !b.d.vsockOK {
+		spec.DisableVsock = true
+	}
 	return qemu.Start(ctx, spec)
 }
 
