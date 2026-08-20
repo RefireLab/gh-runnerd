@@ -21,14 +21,29 @@ type Lease struct {
 
 // DHCP serves a tiny IPv4 DHCP on the isolated bridge.
 type DHCP struct {
-	mu     sync.RWMutex
-	leases map[string]Lease
-	conn   *net.UDPConn
-	log    *slog.Logger
+	mu      sync.RWMutex
+	leases  map[string]Lease
+	conn    *net.UDPConn
+	log     *slog.Logger
+	lastErr error
 }
 
 func NewDHCP(log *slog.Logger) *DHCP {
 	return &DHCP{leases: map[string]Lease{}, log: log}
+}
+
+// Err reports why the server is not serving (bind conflict, socket death),
+// or nil while it runs. The daemon folds this into selftest diagnostics.
+func (d *DHCP) Err() error {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+	return d.lastErr
+}
+
+func (d *DHCP) setErr(err error) {
+	d.mu.Lock()
+	d.lastErr = err
+	d.mu.Unlock()
 }
 
 // Set registers or replaces a lease keyed by MAC.
@@ -61,18 +76,30 @@ func (d *DHCP) ListenAndServe(iface string) error {
 	lc := net.ListenConfig{Control: dhcpControl(iface)}
 	pc, err := lc.ListenPacket(context.Background(), "udp4", ":67")
 	if err != nil {
-		return fmt.Errorf("dhcp listen :67 on %s: %w", iface, err)
+		err = fmt.Errorf("dhcp listen :67 on %s: %w", iface, err)
+		d.setErr(err)
+		return err
 	}
 	conn := pc.(*net.UDPConn)
+	d.mu.Lock()
 	d.conn = conn
+	d.lastErr = nil
+	d.mu.Unlock()
+	if d.log != nil {
+		d.log.Info("dhcp listening", "iface", iface, "port", 67)
+	}
 	buf := make([]byte, 1500)
 	for {
 		n, src, err := conn.ReadFromUDP(buf)
 		if err != nil {
+			d.setErr(err)
 			return err
 		}
 		resp, err := d.handle(buf[:n])
 		if err != nil || resp == nil {
+			if err != nil && d.log != nil {
+				d.log.Warn("dhcp request ignored", "src", src.String(), "err", err)
+			}
 			continue
 		}
 		dst := &net.UDPAddr{IP: net.IPv4bcast, Port: 68}

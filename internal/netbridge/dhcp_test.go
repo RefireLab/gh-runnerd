@@ -63,6 +63,22 @@ func TestDiscoverOfferRoundTrip(t *testing.T) {
 	}
 }
 
+func TestDHCPErrTracksBindFailure(t *testing.T) {
+	t.Parallel()
+	d := NewDHCP(nil)
+	if err := d.Err(); err != nil {
+		t.Fatalf("fresh server must have no error: %v", err)
+	}
+	d.setErr(net.ErrClosed)
+	if err := d.Err(); err == nil {
+		t.Fatal("recorded error must surface")
+	}
+	d.setErr(nil)
+	if err := d.Err(); err != nil {
+		t.Fatalf("cleared error must be nil: %v", err)
+	}
+}
+
 func TestDHCPUnknownMAC(t *testing.T) {
 	t.Parallel()
 	d := NewDHCP(nil)
