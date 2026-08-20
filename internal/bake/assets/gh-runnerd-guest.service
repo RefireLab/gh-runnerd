@@ -9,6 +9,9 @@ Type=simple
 ExecStart=/usr/local/bin/gh-runnerd-guest
 Restart=on-failure
 RestartSec=2
+# Hosted-software images record ImageOS, RUNNER_TOOL_CACHE, PATH etc.
+# there; the runner inherits them through the agent.
+EnvironmentFile=-/etc/environment
 Environment=GH_RUNNERD_HOST=10.87.0.1
 Environment=GH_RUNNERD_RUNNER_DIR=/opt/actions-runner
 

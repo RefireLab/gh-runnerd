@@ -1,28 +1,61 @@
 # Runner VM images
 
-Shipped templates are **Ubuntu 24.04 only** (amd64 and arm64). Debian/Fedora templates are not included.
+Templates are **Ubuntu only** (amd64 and arm64). Debian/Fedora templates are not included.
 
-The golden image is a minimal Ubuntu cloud disk with:
+Every image contains the gh-runnerd base:
 
 - official GitHub Actions Runner (pinned at bake time, default v2.336.0)
 - Docker Engine + Compose plugin
-- git, bash, sh, curl, tar, gzip, unzip, jq, ca-certificates, coreutils
-- qemu-guest-agent
-- gh-runnerd-guest
+- qemu-guest-agent, gh-runnerd-guest
 - internal CA + registry `hosts.toml`
 
-It is **not** GitHub's `ubuntu-latest` kitchen sink.
+What else it contains is the **flavor**:
+
+| Flavor | Contents | Image size | Bake time |
+|---|---|---|---|
+| `minimal` (default) | base + git, curl, jq, tar, unzip | ~2 GB | 10-20 min |
+| `essential` | + the everyday tools from GitHub's own images: git/git-lfs/gh, node + nvm, python + pipx, cmake, ninja, gcc/g++, zstd, yq, PowerShell, Docker plugins (buildx, compose) | ~10 GB | ~1-2 h |
+| `full` | every script GitHub's `ubuntu-latest` runs: browsers, JDKs, Android SDK, CodeQL, .NET, Go/Rust/Ruby/PHP, toolcache, clouds... | ~60-80 GB | many hours, needs ~130 GB free |
+
+`essential` and `full` do not reimplement anything: the bake downloads a pinned **release of [actions/runner-images](https://github.com/actions/runner-images)** — the very repository GitHub builds its hosted VMs from — and executes the same build scripts inside the QEMU VM (no Packer, no Azure). Pick the upstream image and flavor:
+
+```bash
+sudo gh-runnerd runner-image available   # list upstream images + latest releases
+sudo gh-runnerd runner-image bake --image ubuntu-24.04 --flavor essential
+sudo gh-runnerd runner-image bake --image ubuntu-26.04 --flavor full
+```
+
+The choice is recorded in the config and reused by `runner-image update`:
+
+```toml
+[image]
+flavor = "essential"          # minimal | essential | full
+upstream = "ubuntu-24.04"     # any image from: runner-image available
+# upstream_ref = "ubuntu24/20260810.271"   # optional pin; default: newest release
+```
+
+Useful knobs:
+
+- `--upstream-ref ubuntu24/20260810.271` — pin an exact upstream release (or `main`).
+- `--skip-scripts install-codeql-bundle.sh,install-android-sdk.sh` — drop scripts you do not need from any flavor.
+- `--only-scripts ...` — run only the named scripts (debugging).
+- `--timeout 6h` — override the flavor default (45 min / 3 h / 14 h).
+
+If a non-critical upstream script fails (a mirror hiccup, a tool that will not install on your host), the bake **keeps going** and prints the failed script names at the end — the logs live at `/imagegeneration/logs/*.log` inside the image, and `/etc/gh-runnerd-image` records the source release, the flavor, and any failures. Critical failures (apt configuration, Docker) abort the bake.
+
+All the everyday commands:
 
 ```bash
 sudo gh-runnerd runner-image bake        # build + import + activate in one go
+sudo gh-runnerd runner-image available   # what can I mirror?
 sudo gh-runnerd runner-image list
 sudo gh-runnerd runner-image import ./ubuntu-24.04-amd64.qcow2   # name defaults to the file name
 sudo gh-runnerd runner-image validate ubuntu-24.04-amd64
 sudo gh-runnerd runner-image activate ubuntu-24.04-amd64
-sudo gh-runnerd runner-image update      # re-bake from the newest Ubuntu cloud image
+sudo gh-runnerd runner-image update      # re-bake: newest cloud image + newest upstream release
 ```
 
-`bake` is built into the binary: it downloads the official Ubuntu 24.04 cloud image, boots it once under QEMU/KVM to install Docker, the pinned GitHub Actions runner, and `gh-runnerd-guest`, verifies the install completed, compresses the qcow2, and activates it. It needs `/dev/kvm`, `qemu-system-*`, `qemu-utils`, and `cloud-image-utils` (the `init` wizard installs these).
+`bake` is built into the binary: it downloads the official Ubuntu cloud image for the chosen version, boots it once under QEMU/KVM to install everything, verifies the install completed, compresses the qcow2, and activates it. It needs `/dev/kvm`, `qemu-system-*`, `qemu-utils`, and `cloud-image-utils` (the `init` wizard installs these).
 
 `validate` checks the file exists, SHA-256 matches the catalog MANIFEST, and `qemu-img info` recognizes a disk. Live boot validation is the bake process itself.
 

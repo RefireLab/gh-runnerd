@@ -2,6 +2,7 @@ package qemu
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -54,6 +55,9 @@ func CmdLine(spec Spec) []string {
 }
 
 // CreateOverlay makes a copy-on-write disk backed by the golden qcow2.
+// The overlay never shrinks below the backing image's virtual size:
+// qemu-img would happily create a truncated disk (a 40G view of a 60G
+// filesystem) and the guest would corrupt itself on first boot.
 func CreateOverlay(backing, overlay string, diskGB int) error {
 	if err := os.MkdirAll(filepath.Dir(overlay), 0o700); err != nil {
 		return err
@@ -63,6 +67,12 @@ func CreateOverlay(backing, overlay string, diskGB int) error {
 	}
 	args := []string{"create", "-f", "qcow2", "-F", "qcow2", "-b", backing, overlay}
 	if diskGB > 0 {
+		if backingGB, err := virtualSizeGB(backing); err == nil && diskGB <= backingGB {
+			// The backing size already satisfies vm.disk; inherit it.
+			diskGB = 0
+		}
+	}
+	if diskGB > 0 {
 		args = append(args, fmt.Sprintf("%dG", diskGB))
 	}
 	cmd := exec.Command("qemu-img", args...)
@@ -71,6 +81,22 @@ func CreateOverlay(backing, overlay string, diskGB int) error {
 		return fmt.Errorf("qemu-img create overlay: %s (%w)", strings.TrimSpace(string(out)), err)
 	}
 	return nil
+}
+
+// virtualSizeGB reads a qcow2's virtual disk size, rounded up to GiB.
+func virtualSizeGB(image string) (int, error) {
+	out, err := exec.Command("qemu-img", "info", "--output=json", image).Output()
+	if err != nil {
+		return 0, err
+	}
+	var info struct {
+		VirtualSize int64 `json:"virtual-size"`
+	}
+	if err := json.Unmarshal(out, &info); err != nil {
+		return 0, err
+	}
+	const gib = int64(1) << 30
+	return int((info.VirtualSize + gib - 1) / gib), nil
 }
 
 // Instance is a running QEMU process.

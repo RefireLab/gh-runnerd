@@ -29,6 +29,9 @@ gh-runnerd doctor
 | `poll queued jobs ... invalid control character in URL` | Arrow keys pressed in an old init wizard were recorded into the config (e.g. `github.poll_repos`). The config now fails to load with the exact field named; edit the value or re-run `sudo gh-runnerd init`. |
 | VM repeats DHCP DISCOVER, never takes the offer | Host-generated replies leave with an unfilled UDP checksum, which the guest's DHCP client drops; and pre-0.3.3 answered REQUEST with the wrong message type. `serve` now installs the `CHECKSUM --checksum-fill` mangle rule and replies OFFER/ACK correctly. |
 | `Device or resource busy` on tap after restart | Pre-0.3.0 leftovers: killing `serve` orphaned QEMU processes holding the TAPs. `serve` now destroys its VMs on shutdown and removes orphans (matching `qemu-system.* -name <prefix>-N-N`), stale `tap-ghrd*`, and old overlays at startup. |
+| Job fails: `node: command not found` (or gh, cmake, ...) | The default `minimal` image has no `ubuntu-latest` toolset. Bake one that does: `sudo gh-runnerd runner-image bake --image ubuntu-24.04 --flavor essential` (or `full`). See [runner-images.md](runner-images.md). |
+| `some hosted-software scripts failed` after a bake | Non-critical upstream installer(s) failed; the image still built without those tools. Logs: `/imagegeneration/logs/*.log` inside the image; summary in `/etc/gh-runnerd-image`. Rebuild later or `--skip-scripts <name>` to accept. |
+| `not enough disk for this bake` | The `full` flavor needs ~130 GB free (image data + compressed copy). Free space, choose `essential`, or override with `GH_RUNNERD_SKIP_DISK_CHECK=1`. |
 
 Daemon logs go to stderr / journald:
 

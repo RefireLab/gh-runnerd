@@ -10,14 +10,21 @@ import (
 const DefaultRunnerVersion = "2.336.0"
 
 // installScript is executed inside the bake VM from the mounted seed share.
-// It installs the guest agent, trust for the local registry, Docker, and the
+// It optionally provisions GitHub hosted-runner software first, then
+// installs the guest agent, trust for the local registry, Docker, and the
 // official GitHub Actions runner, then marks success with BAKE_OK.
-func installScript(runnerVersion, runnerArch string, hasExtraRuns bool) string {
+func installScript(runnerVersion, runnerArch string, hasExtraRuns, hasHosted bool) string {
 	var b strings.Builder
 	b.WriteString(`#!/bin/bash
 set -euo pipefail
 SEED=/mnt/gh-runnerd-seed
-install -m 0755 "$SEED/gh-runnerd-guest" /usr/local/bin/gh-runnerd-guest
+`)
+	if hasHosted {
+		// Upstream scripts run first so the core install below owns the
+		// final Docker daemon config and runner directory.
+		b.WriteString("bash \"$SEED/hosted-setup.sh\"\n\n")
+	}
+	b.WriteString(`install -m 0755 "$SEED/gh-runnerd-guest" /usr/local/bin/gh-runnerd-guest
 install -m 0644 "$SEED/gh-runnerd-guest.service" /etc/systemd/system/gh-runnerd-guest.service
 if [[ -s "$SEED/gh-runnerd-ca.crt" ]]; then
   install -m 0644 "$SEED/gh-runnerd-ca.crt" /usr/local/share/ca-certificates/gh-runnerd.crt
@@ -33,6 +40,9 @@ install -m 0644 "$SEED/hosts.toml.quay" /etc/docker/certs.d/quay.io/hosts.toml
 curl -fsSL https://get.docker.com | sh
 apt-get install -y docker-compose-plugin || true
 usermod -aG docker ubuntu || true
+# When the hosted setup already started Docker, it must reload the
+# registry mirror config installed above.
+systemctl restart docker || true
 
 install -d -o ubuntu -g ubuntu /opt/actions-runner
 cd /opt/actions-runner
@@ -42,7 +52,10 @@ cd /opt/actions-runner
 	b.WriteString(`tar xzf actions-runner.tgz
 rm -f actions-runner.tgz
 chown -R ubuntu:ubuntu /opt/actions-runner
-./bin/installdependencies.sh || apt-get install -y libicu74 libssl3t64 libkrb5-3 zlib1g || true
+./bin/installdependencies.sh || {
+  icu=$(apt-cache search --names-only '^libicu[0-9]+$' | awk '{print $1}' | sort -V | tail -1)
+  apt-get install -y "${icu:-libicu74}" libssl3t64 libkrb5-3 zlib1g || true
+}
 
 systemctl enable qemu-guest-agent.service || true
 systemctl enable gh-runnerd-guest.service
