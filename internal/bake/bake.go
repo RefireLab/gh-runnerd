@@ -450,6 +450,7 @@ func bootBakeVM(ctx context.Context, o Options, base, seedISO, seedDir, consoleL
 		go func() {
 			t := time.NewTicker(time.Minute)
 			defer t.Stop()
+			warned := false
 			for {
 				select {
 				case <-done:
@@ -460,6 +461,17 @@ func bootBakeVM(ctx context.Context, o Options, base, seedISO, seedDir, consoleL
 						msg += " — " + step
 					}
 					o.say("%s", msg)
+					// A healthy guest prints boot output within seconds. A
+					// silent console after minutes means the vCPU never ran:
+					// classic broken nested KVM (/dev/kvm exists, guests
+					// never execute).
+					if !warned && acc == "kvm" && time.Since(start) > 3*time.Minute {
+						if st, err := os.Stat(consoleLog); err == nil && st.Size() == 0 {
+							warned = true
+							o.say("!! the VM has produced no console output — KVM may not actually work on this machine (broken nested virtualization?)")
+							o.say("   if this ends in a timeout, retry with software emulation: GH_RUNNERD_BAKE_ACCEL=tcg (much slower)")
+						}
+					}
 				}
 			}
 		}()
@@ -467,6 +479,9 @@ func bootBakeVM(ctx context.Context, o Options, base, seedISO, seedDir, consoleL
 	runErr := cmd.Run()
 	close(done)
 	if runCtx.Err() == context.DeadlineExceeded {
+		if st, err := os.Stat(consoleLog); err == nil && st.Size() == 0 && acc == "kvm" {
+			return fmt.Errorf("bake timed out after %s and the VM never produced any console output — KVM is present but guests do not run (broken nested virtualization?); retry with GH_RUNNERD_BAKE_ACCEL=tcg (slow) or bake on a host with working KVM", o.Timeout)
+		}
 		return fmt.Errorf("bake timed out after %s — check your internet connection; console log: %s", o.Timeout, consoleLog)
 	}
 	if runErr != nil {

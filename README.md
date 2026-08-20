@@ -81,6 +81,8 @@ jobs:
 | See the service | `systemctl status gh-runnerd` |
 | See live logs | `journalctl -u gh-runnerd -f` |
 | Rebuild the VM image (newest Ubuntu + runner) | `sudo gh-runnerd runner-image update` |
+| Get GitHub's `ubuntu-latest` tools in the VM | `sudo gh-runnerd runner-image bake --image ubuntu-24.04 --flavor essential` |
+| See which GitHub images can be mirrored | `gh-runnerd runner-image available` |
 | Add a VM image from a file | `sudo gh-runnerd runner-image import` (it's a wizard too) |
 | Re-run the whole setup | `sudo gh-runnerd init` |
 
@@ -114,7 +116,7 @@ Ubuntu host
 
 - `runs-on: gh-runnerd` picks your infrastructure; `container.image` picks the job's Linux environment.
 - Jobs **never** touch the host: no host shell, no host `docker.sock`.
-- The VM is minimal Ubuntu + Docker + the official runner — not a clone of GitHub's `ubuntu-latest` (no preinstalled Node/Python/browsers; install what you need in the job or bake a custom image with a [Runnerfile](docs/runner-images.md)).
+- The default VM is minimal Ubuntu + Docker + the official runner. Want it to look like GitHub's `ubuntu-latest`? Bake it with the same scripts GitHub uses ([actions/runner-images](https://github.com/actions/runner-images)): `sudo gh-runnerd runner-image bake --image ubuntu-24.04 --flavor essential` (everyday tools: git, gh, node, python, cmake...) or `--flavor full` (everything, ~80 GB). Details: [docs/runner-images.md](docs/runner-images.md).
 - An embedded pull-only registry on an isolated bridge caches container images, so repeated `docker pull`s are instant and local images work: `gh-runnerd image import ./my-ci.tar --name my-ci --tag 1.0`, then `container: image: gh-runnerd.local/my-ci:1.0`.
 
 More detail: [docs/install.md](docs/install.md) · [docs/architecture.md](docs/architecture.md) · [docs/github-app.md](docs/github-app.md) · [examples/workflows](examples/workflows)
