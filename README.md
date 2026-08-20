@@ -121,4 +121,6 @@ More detail: [docs/install.md](docs/install.md) · [docs/architecture.md](docs/a
 
 ## License
 
-MIT. Built by [Refire Lab](https://refirelab.com/).
+MIT
+
+Crafted by [Refirelab](https://refirelab.com/), co-piloted by a few AI agents.
