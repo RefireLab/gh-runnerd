@@ -249,13 +249,13 @@ func askConfigQuestions(ctx context.Context, p *wizard.Prompter, preset initPres
 		return config.Config{}, err
 	}
 	cfg.Pool.MaxConcurrent = maxConc
-	warm, err := p.AskYesNo("Keep one VM warmed up between jobs? (jobs start in seconds, costs ~4 GB RAM all the time)", false)
+	warm, err := p.AskIntRange(
+		fmt.Sprintf("How many VMs should stay warmed up waiting for jobs? (0 = boot on demand, ~30-40s per job start; each warm VM holds ~4 GB RAM all the time; up to %d)", maxConc),
+		0, 0, maxConc)
 	if err != nil {
 		return config.Config{}, err
 	}
-	if warm {
-		cfg.Pool.MinIdle = 1
-	}
+	cfg.Pool.MinIdle = warm
 	return cfg, nil
 }
 

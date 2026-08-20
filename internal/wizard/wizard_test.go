@@ -68,6 +68,20 @@ func TestAskStripsArrowKeys(t *testing.T) {
 	}
 }
 
+func TestAskIntRange(t *testing.T) {
+	p := New(strings.NewReader("\n9\n0\n5\n"), &bytes.Buffer{})
+	if v, _ := p.AskIntRange("a", 1, 0, 5); v != 1 {
+		t.Fatalf("empty must return default: got %d", v)
+	}
+	// 9 is above max → re-ask; 0 is a valid minimum.
+	if v, _ := p.AskIntRange("b", 1, 0, 5); v != 0 {
+		t.Fatalf("retry then 0: got %d", v)
+	}
+	if v, _ := p.AskIntRange("c", 1, 0, 5); v != 5 {
+		t.Fatalf("got %d", v)
+	}
+}
+
 func TestAskSecretNonTTY(t *testing.T) {
 	p := New(strings.NewReader("tok123\n"), &bytes.Buffer{})
 	if p.Interactive() {
