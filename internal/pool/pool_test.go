@@ -116,6 +116,45 @@ func TestHandleQueuedJobIgnoresForeignLabels(t *testing.T) {
 	}
 }
 
+func TestMaintainIdleKeepsWarmVMIdleAfterRunnerStarts(t *testing.T) {
+	cfg := config.Defaults()
+	cfg.DataDir = t.TempDir()
+	cfg.Pool.MinIdle = 1
+	cfg.Pool.MaxConcurrent = 5
+	_ = cfg.Layout().Ensure()
+	backend := &fakeBackend{t: t, guests: make(chan *guest.Session, 2), imagePath: filepath.Join(t.TempDir(), "b.qcow2")}
+	sess, peer := pipeSession(t)
+	backend.guests <- sess
+	go func() {
+		c := guest.NewConn(peer)
+		msg, err := c.Recv()
+		if err != nil || msg.Type != guest.KindJIT {
+			return
+		}
+		_ = c.Send(guest.Message{Type: guest.KindJobStarted})
+		io.Copy(io.Discard, peer)
+	}()
+	m := New(cfg, slog.Default(), backend)
+	if err := m.MaintainIdle(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		st := m.Status()
+		if st.Idle == 1 && backend.jits == 1 {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if err := m.MaintainIdle(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	st := m.Status()
+	if st.Idle != 1 || st.Busy != 0 || st.Booting != 0 || len(st.VMs) != 1 {
+		t.Fatalf("warm VM must stay idle after run.sh starts: %+v", st)
+	}
+}
+
 func TestPoolExhausted(t *testing.T) {
 	cfg := config.Defaults()
 	cfg.DataDir = t.TempDir()

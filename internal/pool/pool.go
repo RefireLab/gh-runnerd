@@ -285,7 +285,7 @@ func (m *Manager) finishBoot(ctx context.Context, vm *VM, labels []string) {
 
 	go func() {
 		_ = sess.RecvLoop(func(msg guest.Message) {
-			if msg.Type == guest.KindJobStarted {
+			if msg.Type == guest.KindJobStarted && vm.JobID != 0 {
 				m.mu.Lock()
 				vm.State = StateBusy
 				m.mu.Unlock()

@@ -155,6 +155,13 @@ func Run(cfg config.Config) Report {
 	} else {
 		add(Check{"vm-network", OK, cfg.Network.CIDR})
 	}
+	if b, err := os.ReadFile("/proc/sys/net/ipv4/ip_forward"); err == nil {
+		if strings.TrimSpace(string(b)) == "1" {
+			add(Check{"ip-forward", OK, "net.ipv4.ip_forward=1"})
+		} else {
+			add(Check{"ip-forward", Warn, "net.ipv4.ip_forward=0 — VMs cannot reach GitHub; serve enables this at start"})
+		}
+	}
 	add(registryPortCheck(cfg))
 
 	if _, err := os.Stat(filepath.Join(dirs.State, "status.json")); err == nil {

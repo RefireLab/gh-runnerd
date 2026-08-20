@@ -21,6 +21,8 @@ gh-runnerd doctor
 | Registry connection refused from VM | Serve isn't running, or the registry didn't bind (bridge setup failed — needs root). Check `gh-runnerd doctor`. |
 | `registry listen ...: address already in use` | Another service owns that port. Re-run `sudo gh-runnerd init` (it picks a free port) or set `registry.listen = "10.87.0.1:42443"` in the config. |
 | VM network overlaps LAN/Docker/VPN | `gh-runnerd doctor` warns about it; re-run `sudo gh-runnerd init` and pick the suggested free subnet, then `sudo gh-runnerd runner-image update`. |
+| JIT runners stay Offline, `MASQUERADE` counter stays 0 | Docker/ufw set `FORWARD` policy `DROP`. `serve` inserts ACCEPT rules so VMs can NAT. Restart `serve` (v0.2.9+) or add them by hand: `iptables -I FORWARD -i br-ghrunnerd ! -o br-ghrunnerd -j ACCEPT`. |
+| Pool fills to `max` with `busy` and no jobs | Pre-0.2.9: guest `job_started` made warm VMs look busy, so `MaintainIdle` kept booting more. Upgrade. |
 
 Daemon logs go to stderr / journald:
 
