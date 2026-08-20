@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strings"
 	"time"
@@ -94,6 +95,9 @@ func (c Catalog) Active() (RunnerImage, error) {
 	}
 	return RunnerImage{}, fmt.Errorf("active runner image %q missing from MANIFEST", m.Active)
 }
+
+// familyNameRe matches bare upstream family names like ubuntu-24.04.
+var familyNameRe = regexp.MustCompile(`^ubuntu-\d{2}\.\d{2}$`)
 
 // DefaultName is the shipped Ubuntu template for this host architecture.
 func DefaultName() string {
@@ -241,8 +245,10 @@ func hashFile(path string) (string, int64, error) {
 
 // Find looks up a named template, mapping ubuntu-24.04 to the arch-specific file.
 func (c Catalog) Find(name string) (RunnerImage, error) {
-	if name == "ubuntu-24.04" {
-		name = DefaultName()
+	// Bare family names (vm.template = "ubuntu-24.04") resolve to the
+	// arch-suffixed template baked on this host.
+	if familyNameRe.MatchString(name) {
+		name = name + "-" + runtime.GOARCH
 	}
 	list, err := c.List()
 	if err != nil {

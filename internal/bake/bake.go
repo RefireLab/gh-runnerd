@@ -23,6 +23,7 @@ import (
 type Options struct {
 	Arch          string // amd64 or arm64; must match the host (KVM)
 	Name          string // template name, default ubuntu-24.04-<arch>
+	UbuntuVersion string // Ubuntu release of the base cloud image, default 24.04
 	RunnerVersion string // GitHub Actions runner release
 	GuestBinary   string // explicit path to gh-runnerd-guest
 	CACertPEM     []byte // host CA baked into the VM trust store
@@ -33,11 +34,17 @@ type Options struct {
 	DiskGB        int    // default 40
 	MemoryMB      int    // default 4096
 	CPUs          int    // default 2
+	MinFreeGB     int    // host free-space preflight; 0 skips the check
 	ExtraRuns     []string
-	Fresh         bool // re-download the Ubuntu cloud image
-	Verbose       bool // stream the VM console to Out
-	Timeout       time.Duration
-	Out           io.Writer
+	// HostedTree/HostedSetup provision GitHub hosted-runner software from
+	// an extracted actions/runner-images checkout: the tree is shared with
+	// the VM and the setup script runs before the core install.
+	HostedTree  string
+	HostedSetup string
+	Fresh       bool // re-download the Ubuntu cloud image
+	Verbose     bool // stream the VM console to Out
+	Timeout     time.Duration
+	Out         io.Writer
 }
 
 // Tool is a host binary bake or serve depends on, with its apt package.
@@ -100,8 +107,11 @@ func withDefaults(o Options) Options {
 	if o.Arch == "" {
 		o.Arch = runtime.GOARCH
 	}
+	if o.UbuntuVersion == "" {
+		o.UbuntuVersion = "24.04"
+	}
 	if o.Name == "" {
-		o.Name = "ubuntu-24.04-" + o.Arch
+		o.Name = "ubuntu-" + o.UbuntuVersion + "-" + o.Arch
 	}
 	if o.RunnerVersion == "" {
 		o.RunnerVersion = DefaultRunnerVersion
@@ -186,6 +196,10 @@ func Run(ctx context.Context, o Options) error {
 		return err
 	}
 
+	if err := checkFreeSpace(o, work); err != nil {
+		return err
+	}
+
 	cloudImg, err := fetchCloudImage(ctx, o)
 	if err != nil {
 		return err
@@ -223,6 +237,7 @@ func Run(ctx context.Context, o Options) error {
 	if err := checkBakeResult(seedDir, consoleLog); err != nil {
 		return err
 	}
+	reportHostedFailures(o, seedDir)
 
 	o.say(">> compressing image (this shrinks it a lot)")
 	if err := os.MkdirAll(filepath.Dir(o.OutPath), 0o755); err != nil {
@@ -232,6 +247,43 @@ func Run(ctx context.Context, o Options) error {
 		return err
 	}
 	o.say(">> baked %s", o.OutPath)
+	return nil
+}
+
+// reportHostedFailures surfaces non-critical upstream script failures
+// recorded by the hosted setup script. The bake still succeeded; the
+// operator decides whether the missing tools matter.
+func reportHostedFailures(o Options, seedDir string) {
+	raw, err := os.ReadFile(filepath.Join(seedDir, "PARITY_FAILED"))
+	if err != nil {
+		return
+	}
+	failed := strings.TrimPrefix(strings.TrimSpace(string(raw)), "failed:")
+	if failed == "" {
+		return
+	}
+	o.say("!! some hosted-software scripts failed (image still built): %s", failed)
+	o.say("   details: /imagegeneration/logs/*.log inside the image; rebuild with")
+	o.say("   --skip-scripts %s to silence, or retry later", strings.Join(strings.Fields(failed), ","))
+}
+
+// checkFreeSpace fails early when the work or output filesystem clearly
+// cannot hold the image about to be built. GH_RUNNERD_SKIP_DISK_CHECK=1
+// bypasses it.
+func checkFreeSpace(o Options, work string) error {
+	if o.MinFreeGB <= 0 || os.Getenv("GH_RUNNERD_SKIP_DISK_CHECK") == "1" {
+		return nil
+	}
+	for _, dir := range []string{work, filepath.Dir(o.OutPath)} {
+		free, err := freeGB(dir)
+		if err != nil {
+			continue
+		}
+		if free < o.MinFreeGB {
+			return fmt.Errorf("not enough disk for this bake: %s has %d GB free, need about %d GB — free space or bake a smaller flavor (GH_RUNNERD_SKIP_DISK_CHECK=1 overrides)",
+				dir, free, o.MinFreeGB)
+		}
+	}
 	return nil
 }
 
@@ -265,7 +317,7 @@ func writeSeed(seedDir, guest string, o Options) error {
 	if o.Arch == "arm64" {
 		runnerArch = "arm64"
 	}
-	script := installScript(o.RunnerVersion, runnerArch, len(o.ExtraRuns) > 0)
+	script := installScript(o.RunnerVersion, runnerArch, len(o.ExtraRuns) > 0, o.HostedSetup != "")
 	if err := os.WriteFile(filepath.Join(seedDir, "install.sh"), []byte(script), 0o755); err != nil {
 		return err
 	}
@@ -274,7 +326,53 @@ func writeSeed(seedDir, guest string, o Options) error {
 			return err
 		}
 	}
+	if o.HostedSetup != "" {
+		if o.HostedTree == "" {
+			return fmt.Errorf("bake: HostedSetup requires HostedTree")
+		}
+		if err := copyTree(o.HostedTree, filepath.Join(seedDir, "runner-images")); err != nil {
+			return fmt.Errorf("copy runner-images tree into seed: %w", err)
+		}
+		if err := os.WriteFile(filepath.Join(seedDir, "hosted-setup.sh"), []byte(o.HostedSetup), 0o755); err != nil {
+			return err
+		}
+	}
 	return nil
+}
+
+// copyTree copies a directory of regular files (the runner-images
+// checkout) preserving the executable bit. Symlinks and specials are
+// skipped — the upstream repo has none we need.
+func copyTree(src, dst string) error {
+	return filepath.WalkDir(src, func(p string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		rel, err := filepath.Rel(src, p)
+		if err != nil {
+			return err
+		}
+		target := filepath.Join(dst, rel)
+		if d.IsDir() {
+			return os.MkdirAll(target, 0o755)
+		}
+		if !d.Type().IsRegular() {
+			return nil
+		}
+		info, err := d.Info()
+		if err != nil {
+			return err
+		}
+		mode := os.FileMode(0o644)
+		if info.Mode()&0o111 != 0 {
+			mode = 0o755
+		}
+		raw, err := os.ReadFile(p)
+		if err != nil {
+			return err
+		}
+		return os.WriteFile(target, raw, mode)
+	})
 }
 
 // accel returns the QEMU accelerator. GH_RUNNERD_BAKE_ACCEL=tcg is an
@@ -338,7 +436,11 @@ func bootBakeVM(ctx context.Context, o Options, base, seedISO, seedDir, consoleL
 	cmd.Stdout = sink
 	cmd.Stderr = sink
 
-	o.say(">> building the VM image — usually 10-20 minutes, needs internet")
+	if o.HostedSetup != "" {
+		o.say(">> building the VM image with GitHub hosted-runner software — this can take a long time")
+	} else {
+		o.say(">> building the VM image — usually 10-20 minutes, needs internet")
+	}
 	if !o.Verbose {
 		o.say("   (progress log: %s)", consoleLog)
 	}
@@ -353,7 +455,11 @@ func bootBakeVM(ctx context.Context, o Options, base, seedISO, seedDir, consoleL
 				case <-done:
 					return
 				case <-t.C:
-					o.say("   still building... (%s elapsed)", time.Since(start).Round(time.Second))
+					msg := fmt.Sprintf("   still building... (%s elapsed)", time.Since(start).Round(time.Second))
+					if step := lastLine(filepath.Join(seedDir, "PARITY_PROGRESS")); step != "" {
+						msg += " — " + step
+					}
+					o.say("%s", msg)
 				}
 			}
 		}()
@@ -394,7 +500,7 @@ func Arm64Firmware() (string, error) {
 }
 
 func fetchCloudImage(ctx context.Context, o Options) (string, error) {
-	name := fmt.Sprintf("noble-server-cloudimg-%s.img", o.Arch)
+	name := fmt.Sprintf("ubuntu-%s-server-cloudimg-%s.img", o.UbuntuVersion, o.Arch)
 	dest := filepath.Join(o.CacheDir, name)
 	if !o.Fresh {
 		if st, err := os.Stat(dest); err == nil && st.Size() > 100<<20 {
@@ -405,8 +511,8 @@ func fetchCloudImage(ctx context.Context, o Options) (string, error) {
 	if err := os.MkdirAll(o.CacheDir, 0o755); err != nil {
 		return "", err
 	}
-	url := "https://cloud-images.ubuntu.com/noble/current/" + name
-	o.say(">> downloading Ubuntu 24.04 cloud image (~600 MB)")
+	url := "https://cloud-images.ubuntu.com/releases/" + o.UbuntuVersion + "/release/" + name
+	o.say(">> downloading Ubuntu %s cloud image (~600 MB)", o.UbuntuVersion)
 	tmp := dest + ".part"
 	out, err := os.Create(tmp)
 	if err != nil {
@@ -466,6 +572,19 @@ func runCmd(ctx context.Context, bin string, args ...string) error {
 		return fmt.Errorf("%s %s: %s (%w)", bin, strings.Join(args, " "), strings.TrimSpace(string(out)), err)
 	}
 	return nil
+}
+
+// lastLine returns the last non-empty line of a small progress file.
+func lastLine(path string) string {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	lines := strings.Split(strings.TrimSpace(string(raw)), "\n")
+	if len(lines) == 0 {
+		return ""
+	}
+	return strings.TrimSpace(lines[len(lines)-1])
 }
 
 func tailFile(path string, max int64) string {

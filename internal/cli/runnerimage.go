@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"time"
@@ -16,6 +17,7 @@ import (
 	"github.com/RefireLab/gh-runnerd/internal/config"
 	"github.com/RefireLab/gh-runnerd/internal/images"
 	"github.com/RefireLab/gh-runnerd/internal/registry"
+	"github.com/RefireLab/gh-runnerd/internal/runnerimages"
 	"github.com/RefireLab/gh-runnerd/internal/wizard"
 )
 
@@ -31,6 +33,7 @@ func runnerImageCmd() *cobra.Command {
 	cmd.AddCommand(runnerActivateCmd())
 	cmd.AddCommand(runnerBuildCmd())
 	cmd.AddCommand(runnerUpdateCmd())
+	cmd.AddCommand(runnerAvailableCmd())
 	return cmd
 }
 
@@ -50,10 +53,23 @@ type bakeOverrides struct {
 	Name          string
 	RunnerVersion string
 	Guest         string
+	Flavor        string // minimal | essential | full ("" = config)
+	Image         string // upstream family, e.g. ubuntu-24.04 ("" = config)
+	UpstreamRef   string // release tag or branch ("" = newest release)
+	SkipScripts   []string
+	OnlyScripts   []string
 	ExtraRuns     []string
 	Fresh         bool
 	Verbose       bool
 	Timeout       time.Duration
+}
+
+func addHostedFlags(cmd *cobra.Command, o *bakeOverrides) {
+	cmd.Flags().StringVar(&o.Flavor, "flavor", "", "image contents: minimal, essential, or full (default from config, else minimal)")
+	cmd.Flags().StringVar(&o.Image, "image", "", "upstream image to mirror, e.g. ubuntu-24.04 (see: gh-runnerd runner-image available)")
+	cmd.Flags().StringVar(&o.UpstreamRef, "upstream-ref", "", "pin an actions/runner-images release tag or branch (default: newest release)")
+	cmd.Flags().StringSliceVar(&o.SkipScripts, "skip-scripts", nil, "upstream build scripts to skip, by file name")
+	cmd.Flags().StringSliceVar(&o.OnlyScripts, "only-scripts", nil, "run only these upstream build scripts (debugging)")
 }
 
 // bakeAndInstall builds the golden image with the config's VM settings,
@@ -70,30 +86,85 @@ func bakeAndInstall(ctx context.Context, cfg config.Config, out io.Writer, o bak
 	if err != nil {
 		return fmt.Errorf("read CA (run gh-runnerd init first): %w", err)
 	}
-	name := o.Name
-	if name == "" {
-		name = images.DefaultName()
+
+	flavor, err := runnerimages.ParseFlavor(firstNonEmptyStr(o.Flavor, cfg.Image.Flavor))
+	if err != nil {
+		return err
 	}
-	tmpOut := filepath.Join(dirs.Runner, "."+name+".qcow2.tmp")
-	defer os.Remove(tmpOut)
-	err = bake.Run(ctx, bake.Options{
-		Name:          name,
+	family := firstNonEmptyStr(o.Image, cfg.Image.Upstream, "ubuntu-24.04")
+	if !runnerimages.ValidFamily(family) {
+		return fmt.Errorf("unknown image %q — list them with: gh-runnerd runner-image available", family)
+	}
+	if o.Image != "" && o.Flavor == "" && flavor == runnerimages.FlavorMinimal {
+		// --image without a flavor means the user wants the upstream
+		// software, not just a different base version.
+		flavor = runnerimages.FlavorEssential
+	}
+
+	opts := bake.Options{
+		Name:          o.Name,
+		UbuntuVersion: runnerimages.UbuntuVersion(family),
 		RunnerVersion: o.RunnerVersion,
 		GuestBinary:   o.Guest,
 		CACertPEM:     caPEM,
 		HostIP:        cfg.Network.HostIP,
-		OutPath:       tmpOut,
 		CacheDir:      filepath.Join(dirs.Cache, "bake"),
 		DiskGB:        cfg.DiskGB(),
 		MemoryMB:      cfg.MemoryMB(),
 		CPUs:          cfg.VM.CPUs,
+		MinFreeGB:     runnerimages.EstimatedDataGB(flavor),
 		ExtraRuns:     o.ExtraRuns,
 		Fresh:         o.Fresh,
 		Verbose:       o.Verbose,
 		Timeout:       o.Timeout,
 		Out:           out,
-	})
-	if err != nil {
+	}
+
+	if flavor != runnerimages.FlavorMinimal {
+		say := func(format string, args ...any) { fmt.Fprintf(out, format+"\n", args...) }
+		ref := firstNonEmptyStr(o.UpstreamRef, cfg.Image.UpstreamRef)
+		if ref == "" {
+			ref, err = runnerimages.LatestReleaseTag(ctx, cfg.GitHub.Token, family, hostArch())
+			if err != nil {
+				say("!! could not resolve the newest %s release (%v) — building from the main branch", runnerimages.Repo, err)
+				ref = "main"
+			}
+		}
+		root, err := runnerimages.Fetch(ctx, filepath.Join(dirs.Cache, "runner-images"), ref, o.Fresh, say)
+		if err != nil {
+			return err
+		}
+		plan, err := runnerimages.BuildPlan(root, family, hostArch(), flavor, ref, o.SkipScripts, o.OnlyScripts)
+		if err != nil {
+			return err
+		}
+		say(">> %s %s: %d upstream build scripts from %s@%s", family, flavor, plan.ScriptCount(), runnerimages.Repo, ref)
+		if len(plan.Dropped) > 0 {
+			say("   (not in this release, skipped: %s)", strings.Join(plan.Dropped, ", "))
+		}
+		opts.HostedTree = root
+		opts.HostedSetup = plan.SetupScript()
+		if rec := runnerimages.RecommendedDiskGB(flavor); opts.DiskGB < rec {
+			say(">> raising the image disk to %d GB for the %s flavor (vm.disk %s is too small for it)", rec, flavor, cfg.VM.Disk)
+			opts.DiskGB = rec
+		}
+		if rec := runnerimages.RecommendedMemoryMB(flavor); opts.MemoryMB < rec {
+			opts.MemoryMB = rec
+		}
+		if opts.Timeout <= 0 {
+			opts.Timeout = runnerimages.RecommendedTimeout(flavor)
+		}
+	}
+
+	name := opts.Name
+	if name == "" {
+		name = "ubuntu-" + opts.UbuntuVersion + "-" + hostArch()
+	}
+	opts.Name = name
+	tmpOut := filepath.Join(dirs.Runner, "."+name+".qcow2.tmp")
+	defer os.Remove(tmpOut)
+	opts.OutPath = tmpOut
+	if err := bake.Run(ctx, opts); err != nil {
 		return err
 	}
 	cat := images.Catalog{Dir: dirs.Runner}
@@ -104,8 +175,24 @@ func bakeAndInstall(ctx context.Context, cfg config.Config, out io.Writer, o bak
 	if err := cat.Activate(name); err != nil {
 		return err
 	}
-	fmt.Fprintf(out, "Runner image ready\n  name:   %s (active)\n  path:   %s\n  sha256: %s\n", img.Name, img.Path, img.SHA256)
+	fmt.Fprintf(out, "Runner image ready\n  name:   %s (active)\n  flavor: %s\n  path:   %s\n  sha256: %s\n", img.Name, flavor, img.Path, img.SHA256)
+	if family != "ubuntu-24.04" && cfg.VM.Template == "ubuntu-24.04" {
+		fmt.Fprintf(out, "note: set vm.template = %q in the config so restarts keep using this image\n", family)
+	}
 	return nil
+}
+
+func hostArch() string {
+	return runtime.GOARCH
+}
+
+func firstNonEmptyStr(vals ...string) string {
+	for _, v := range vals {
+		if strings.TrimSpace(v) != "" {
+			return v
+		}
+	}
+	return ""
 }
 
 // hasActiveRunnerImage reports whether an activated template already exists.
@@ -123,11 +210,14 @@ func runnerBakeCmd() *cobra.Command {
 	var o bakeOverrides
 	cmd := &cobra.Command{
 		Use:   "bake",
-		Short: "Build the Ubuntu 24.04 runner VM image right here (download, install, activate)",
-		Long: "Downloads the official Ubuntu 24.04 cloud image, boots it once under\n" +
-			"QEMU/KVM to install Docker, the GitHub Actions runner, and the gh-runnerd\n" +
-			"guest agent, then imports and activates the result. Needs internet,\n" +
-			"/dev/kvm, and the qemu/cloud-image-utils packages.",
+		Short: "Build the runner VM image right here (download, install, activate)",
+		Long: "Downloads the official Ubuntu cloud image, boots it once under QEMU/KVM\n" +
+			"to install Docker, the GitHub Actions runner, and the gh-runnerd guest\n" +
+			"agent, then imports and activates the result. With --flavor essential or\n" +
+			"--flavor full it also runs GitHub's own actions/runner-images build\n" +
+			"scripts, so the VM carries the same software as GitHub-hosted runners\n" +
+			"(git, gh, node, python, ...). Needs internet, /dev/kvm, and the\n" +
+			"qemu/cloud-image-utils packages.",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg, err := loadConfigOptional(cmd)
@@ -137,13 +227,47 @@ func runnerBakeCmd() *cobra.Command {
 			return bakeAndInstall(cmd.Context(), cfg, cmd.OutOrStdout(), o)
 		},
 	}
-	cmd.Flags().StringVar(&o.Name, "name", "", "template name (default ubuntu-24.04-<arch>)")
+	cmd.Flags().StringVar(&o.Name, "name", "", "template name (default <image>-<arch>)")
 	cmd.Flags().StringVar(&o.RunnerVersion, "runner-version", "", "GitHub Actions runner version (default "+bake.DefaultRunnerVersion+")")
 	cmd.Flags().StringVar(&o.Guest, "guest", "", "path to the gh-runnerd-guest binary")
-	cmd.Flags().BoolVar(&o.Fresh, "fresh", false, "re-download the Ubuntu cloud image instead of using the cache")
+	cmd.Flags().BoolVar(&o.Fresh, "fresh", false, "re-download the Ubuntu cloud image and build scripts instead of using the cache")
 	cmd.Flags().BoolVar(&o.Verbose, "verbose", false, "stream the VM console while baking")
-	cmd.Flags().DurationVar(&o.Timeout, "timeout", 0, "abort the build after this long (default 45m; raise on slow internet)")
+	cmd.Flags().DurationVar(&o.Timeout, "timeout", 0, "abort the build after this long (default 45m, essential 3h, full 14h)")
+	addHostedFlags(cmd, &o)
 	return cmd
+}
+
+func runnerAvailableCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "available",
+		Short: "List upstream images (actions/runner-images) you can bake",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cfg, _ := loadConfigOptional(cmd)
+			out := cmd.OutOrStdout()
+			tags, err := runnerimages.LatestReleases(cmd.Context(), cfg.GitHub.Token, hostArch())
+			if err != nil {
+				fmt.Fprintf(out, "(release lookup failed: %v)\n", err)
+				tags = map[string]string{}
+			}
+			fmt.Fprintf(out, "%-14s %-28s %s\n", "IMAGE", "LATEST RELEASE", "BAKE WITH")
+			for _, family := range runnerimages.KnownFamilies() {
+				tag := tags[family]
+				if tag == "" {
+					tag = "(none for " + hostArch() + ")"
+				}
+				fmt.Fprintf(out, "%-14s %-28s sudo gh-runnerd runner-image bake --image %s --flavor essential\n", family, tag, family)
+			}
+			fmt.Fprintln(out, "\nFlavors:")
+			fmt.Fprintln(out, "  minimal    Docker + runner only (~2 GB image, 10-20 min)")
+			fmt.Fprintln(out, "  essential  + the everyday tools from GitHub's images: git, gh, node,")
+			fmt.Fprintln(out, "             python, cmake, docker plugins, ... (~10 GB image, ~1-2 h)")
+			fmt.Fprintln(out, "  full       everything GitHub's ubuntu-latest ships — browsers, JDKs,")
+			fmt.Fprintln(out, "             Android SDK, CodeQL, toolcache... (~60-80 GB image, needs")
+			fmt.Fprintln(out, "             ~130 GB free disk, takes hours)")
+			return nil
+		},
+	}
 }
 
 func runnerListCmd() *cobra.Command {
@@ -359,8 +483,12 @@ func runnerUpdateCmd() *cobra.Command {
 	var o bakeOverrides
 	cmd := &cobra.Command{
 		Use:   "update",
-		Short: "Rebuild the shipped Ubuntu 24.04 runner template from the newest cloud image",
-		Args:  cobra.NoArgs,
+		Short: "Rebuild the runner template from the newest cloud image and build scripts",
+		Long: "Re-bakes the runner image with the flavor and upstream image recorded in\n" +
+			"the config ([image] section), refreshing the Ubuntu cloud image, the\n" +
+			"GitHub Actions runner, and (for essential/full) the newest\n" +
+			"actions/runner-images release.",
+		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg, err := loadConfigOptional(cmd)
 			if err != nil {
@@ -373,5 +501,7 @@ func runnerUpdateCmd() *cobra.Command {
 	cmd.Flags().StringVar(&o.RunnerVersion, "runner-version", "", "GitHub Actions runner version")
 	cmd.Flags().StringVar(&o.Guest, "guest", "", "path to the gh-runnerd-guest binary")
 	cmd.Flags().BoolVar(&o.Verbose, "verbose", false, "stream the VM console while baking")
+	cmd.Flags().DurationVar(&o.Timeout, "timeout", 0, "abort the build after this long (default 45m, essential 3h, full 14h)")
+	addHostedFlags(cmd, &o)
 	return cmd
 }

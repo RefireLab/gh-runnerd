@@ -52,6 +52,29 @@ func TestValidateRejectsBadPool(t *testing.T) {
 	}
 }
 
+func TestValidateImageSection(t *testing.T) {
+	t.Parallel()
+	cfg := Defaults()
+	if cfg.Image.Flavor != "minimal" || cfg.Image.Upstream != "ubuntu-24.04" {
+		t.Fatalf("image defaults: %+v", cfg.Image)
+	}
+	cfg.Image.Flavor = "essential"
+	cfg.Image.Upstream = "ubuntu-26.04"
+	cfg.Image.UpstreamRef = "ubuntu26/20260817.108"
+	if err := cfg.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	cfg.Image.Flavor = "kitchen-sink"
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "image.flavor") {
+		t.Fatalf("bad flavor accepted: %v", err)
+	}
+	cfg.Image.Flavor = "full"
+	cfg.Image.Upstream = "debian-12"
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "image.upstream") {
+		t.Fatalf("bad upstream accepted: %v", err)
+	}
+}
+
 func TestValidateRejectsControlCharacters(t *testing.T) {
 	t.Parallel()
 	cfg := Defaults()

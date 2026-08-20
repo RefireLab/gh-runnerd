@@ -11,6 +11,7 @@ import (
 
 	"github.com/RefireLab/gh-runnerd/internal/layout"
 	"github.com/RefireLab/gh-runnerd/internal/netbridge"
+	"github.com/RefireLab/gh-runnerd/internal/runnerimages"
 	"github.com/RefireLab/gh-runnerd/internal/units"
 	"github.com/pelletier/go-toml/v2"
 )
@@ -22,6 +23,7 @@ type Config struct {
 	Runner   RunnerConfig   `toml:"runner"`
 	Pool     PoolConfig     `toml:"pool"`
 	VM       VMConfig       `toml:"vm"`
+	Image    ImageConfig    `toml:"image"`
 	Registry RegistryConfig `toml:"registry"`
 	Network  NetworkConfig  `toml:"network"`
 	Webhook  WebhookConfig  `toml:"webhook"`
@@ -62,6 +64,18 @@ type VMConfig struct {
 	Disk        string   `toml:"disk"`
 	Template    string   `toml:"template"`
 	BootTimeout duration `toml:"boot_timeout"`
+}
+
+// ImageConfig selects what the baked runner image contains.
+//
+//	flavor   = "minimal" | "essential" | "full"
+//	upstream = actions/runner-images image name, e.g. "ubuntu-24.04"
+//	upstream_ref = optional pin: a release tag like "ubuntu24/20260816.277"
+//	               or a branch; empty means the newest release.
+type ImageConfig struct {
+	Flavor      string `toml:"flavor"`
+	Upstream    string `toml:"upstream"`
+	UpstreamRef string `toml:"upstream_ref"`
 }
 
 type RegistryConfig struct {
@@ -129,6 +143,10 @@ func Defaults() Config {
 			Disk:        "40G",
 			Template:    "ubuntu-24.04",
 			BootTimeout: duration{90 * time.Second},
+		},
+		Image: ImageConfig{
+			Flavor:   string(runnerimages.FlavorMinimal),
+			Upstream: "ubuntu-24.04",
 		},
 		Registry: RegistryConfig{
 			// Listen is derived from network.host_ip and the default local
@@ -233,6 +251,12 @@ func (c Config) Validate() error {
 	if scope != "repo" && scope != "org" {
 		return fmt.Errorf("github.scope must be repo or org")
 	}
+	if _, err := runnerimages.ParseFlavor(c.Image.Flavor); err != nil {
+		return fmt.Errorf("image.flavor: %w", err)
+	}
+	if c.Image.Upstream != "" && !runnerimages.ValidFamily(c.Image.Upstream) {
+		return fmt.Errorf("image.upstream %q is not an upstream Ubuntu image name (e.g. ubuntu-24.04)", c.Image.Upstream)
+	}
 	hostIP := net.ParseIP(c.Network.HostIP)
 	if hostIP == nil || hostIP.To4() == nil {
 		return fmt.Errorf("network.host_ip %q is not an IPv4 address", c.Network.HostIP)
@@ -262,6 +286,9 @@ func (c Config) validateCleanStrings() error {
 		{"github.org", c.GitHub.Org},
 		{"runner.name_prefix", c.Runner.NamePrefix},
 		{"vm.template", c.VM.Template},
+		{"image.flavor", c.Image.Flavor},
+		{"image.upstream", c.Image.Upstream},
+		{"image.upstream_ref", c.Image.UpstreamRef},
 	}
 	for i, r := range c.GitHub.PollRepos {
 		fields = append(fields, struct{ name, value string }{fmt.Sprintf("github.poll_repos[%d]", i), r})

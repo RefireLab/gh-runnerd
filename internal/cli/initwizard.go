@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -16,6 +17,7 @@ import (
 	"github.com/RefireLab/gh-runnerd/internal/ghapi"
 	"github.com/RefireLab/gh-runnerd/internal/githubutil"
 	"github.com/RefireLab/gh-runnerd/internal/host"
+	"github.com/RefireLab/gh-runnerd/internal/runnerimages"
 	"github.com/RefireLab/gh-runnerd/internal/sysinstall"
 	"github.com/RefireLab/gh-runnerd/internal/wizard"
 )
@@ -128,7 +130,7 @@ func runInitWizard(cmd *cobra.Command, p *wizard.Prompter, preset initPreset) er
 	}
 
 	// Runner VM image: the one heavy step.
-	bakeOK := offerBake(cmd, p, opsCfg, kvmErr)
+	bakeOK := offerBake(cmd, p, &cfg, opsCfg, cfgPath, !reused, kvmErr)
 
 	// Service (system mode) or how to run (portable mode).
 	if systemWide {
@@ -470,9 +472,9 @@ func verifyRunnerTarget(ctx context.Context, p *wizard.Prompter, cfg *config.Con
 	return nil
 }
 
-// offerBake asks to build the VM image now and reports whether an image is
-// ready afterwards.
-func offerBake(cmd *cobra.Command, p *wizard.Prompter, opsCfg config.Config, kvmErr error) bool {
+// offerBake asks to build the VM image now (and which software set it
+// should carry) and reports whether an image is ready afterwards.
+func offerBake(cmd *cobra.Command, p *wizard.Prompter, cfg *config.Config, opsCfg config.Config, cfgPath string, persist bool, kvmErr error) bool {
 	if hasActiveRunnerImage(opsCfg) {
 		p.Say("[ok] runner VM image already present")
 		if opsCfg.Network.HostIP != "10.87.0.1" {
@@ -490,17 +492,90 @@ func offerBake(cmd *cobra.Command, p *wizard.Prompter, opsCfg config.Config, kvm
 		p.Say("Skipping the VM image build: missing packages (see above)")
 		return false
 	}
-	yes, err := p.AskYesNo("Build the runner VM image now? (one time; ~600 MB download, 10-20 minutes)", true)
+	yes, err := p.AskYesNo("Build the runner VM image now? (one time download + build)", true)
 	if err != nil || !yes {
 		p.Say("later, run: sudo gh-runnerd runner-image bake")
 		return false
 	}
+
+	flavor, family := askImageChoice(cmd, p, cfg)
+	if string(flavor) != cfg.Image.Flavor || family != cfg.Image.Upstream {
+		cfg.Image.Flavor = string(flavor)
+		cfg.Image.Upstream = family
+		if persist {
+			if err := config.WriteFile(cfgPath, *cfg); err != nil {
+				p.Say("[!!] could not record the image choice in %s: %v", cfgPath, err)
+			}
+		} else {
+			p.Say("     to keep this choice for runner-image update, add to %s:", cfgPath)
+			p.Say("       [image]")
+			p.Say("       flavor = %q", flavor)
+			p.Say("       upstream = %q", family)
+		}
+	}
+	opsCfg.Image.Flavor = string(flavor)
+	opsCfg.Image.Upstream = family
+
 	if err := bakeAndInstall(cmd.Context(), opsCfg, cmd.OutOrStdout(), bakeOverrides{}); err != nil {
 		p.Say("[!!] image build failed: %v", err)
 		p.Say("     fix the issue and re-run: sudo gh-runnerd runner-image bake")
 		return false
 	}
 	return true
+}
+
+// askImageChoice picks the image flavor and, for hosted flavors, the
+// upstream Ubuntu image (ubuntu-24.04, ubuntu-26.04, ...).
+func askImageChoice(cmd *cobra.Command, p *wizard.Prompter, cfg *config.Config) (runnerimages.Flavor, string) {
+	flavorDefault := 0
+	switch runnerimages.Flavor(cfg.Image.Flavor) {
+	case runnerimages.FlavorEssential:
+		flavorDefault = 1
+	case runnerimages.FlavorFull:
+		flavorDefault = 2
+	case runnerimages.FlavorMinimal:
+		// keep 0
+	}
+	idx, err := p.Select("Which software should the runner VMs carry?", []string{
+		"minimal   — Docker + runner only (~2 GB image, 10-20 min build)",
+		"essential — the everyday tools from GitHub's runner images: git, gh, node, python, cmake, docker... (~10 GB image, ~1-2 h build)",
+		"full      — everything GitHub's ubuntu-latest ships: browsers, JDKs, Android, CodeQL... (~60-80 GB image, needs ~130 GB free, many hours)",
+	}, flavorDefault)
+	if err != nil {
+		return runnerimages.FlavorMinimal, firstNonEmptyStr(cfg.Image.Upstream, "ubuntu-24.04")
+	}
+	flavor := [...]runnerimages.Flavor{runnerimages.FlavorMinimal, runnerimages.FlavorEssential, runnerimages.FlavorFull}[idx]
+
+	family := firstNonEmptyStr(cfg.Image.Upstream, "ubuntu-24.04")
+	if flavor == runnerimages.FlavorMinimal {
+		return flavor, family
+	}
+
+	families := runnerimages.KnownFamilies()
+	ctx, cancel := context.WithTimeout(cmd.Context(), 10*time.Second)
+	defer cancel()
+	tags, terr := runnerimages.LatestReleases(ctx, cfg.GitHub.Token, runtime.GOARCH)
+	options := make([]string, 0, len(families))
+	def := 0
+	for i, f := range families {
+		label := f
+		if terr == nil {
+			if tag, ok := tags[f]; ok {
+				label += "  (release " + tag + ")"
+			} else {
+				label += "  (no release for " + runtime.GOARCH + ")"
+			}
+		}
+		if f == family {
+			def = i
+		}
+		options = append(options, label)
+	}
+	fidx, err := p.Select("Which Ubuntu image should it mirror?", options, def)
+	if err != nil {
+		return flavor, family
+	}
+	return flavor, families[fidx]
 }
 
 func offerService(p *wizard.Prompter, cfgPath string) error {
