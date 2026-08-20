@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"net"
+	"os"
 	"os/exec"
 	"strconv"
 	"strings"
@@ -71,7 +72,10 @@ func SetupCommands(c Config) [][]string {
 		{"ip", "link", "add", c.Bridge, "type", "bridge"},
 		{"ip", "addr", "replace", fmt.Sprintf("%s/%d", c.HostIP, c.prefixLen()), "dev", c.Bridge},
 		{"ip", "link", "set", c.Bridge, "up"},
+		{"sysctl", "-w", "net.ipv4.ip_forward=1"},
 		{"iptables", "-t", "nat", "-C", "POSTROUTING", "-s", c.CIDR, "!", "-d", c.CIDR, "-j", "MASQUERADE"},
+		{"iptables", "-C", "FORWARD", "-i", c.Bridge, "!", "-o", c.Bridge, "-j", "ACCEPT"},
+		{"iptables", "-C", "FORWARD", "-o", c.Bridge, "-m", "conntrack", "--ctstate", "RELATED,ESTABLISHED", "-j", "ACCEPT"},
 		{"iptables", "-C", "FORWARD", "-i", c.Bridge, "-o", c.Bridge, "-j", "DROP"},
 	}
 	if c.RegistryLocal != c.RegistryPort {
@@ -124,8 +128,26 @@ func Setup(c Config) error {
 	if err := run([]string{"ip", "link", "set", c.Bridge, "up"}); err != nil {
 		return err
 	}
+	if err := enableIPForward(); err != nil {
+		return err
+	}
 	if err := ensureIptables(c); err != nil {
 		return err
+	}
+	return nil
+}
+
+func enableIPForward() error {
+	const path = "/proc/sys/net/ipv4/ip_forward"
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return fmt.Errorf("read %s: %w", path, err)
+	}
+	if strings.TrimSpace(string(b)) == "1" {
+		return nil
+	}
+	if err := os.WriteFile(path, []byte("1\n"), 0o644); err != nil {
+		return fmt.Errorf("enable ip_forward: %w", err)
 	}
 	return nil
 }
@@ -147,6 +169,20 @@ func ensureIptables(c Config) error {
 		add := append([]string{"iptables", "-t", "nat", "-A"}, rule...)
 		if err := runIgnore(check, ""); err != nil {
 			if err := run(add); err != nil {
+				return err
+			}
+		}
+	}
+	// Insert outbound ACCEPT at the top so Docker/ufw FORWARD DROP
+	// (policy or a later reject rule) cannot swallow VM traffic to GitHub.
+	for _, r := range [][]string{
+		{"FORWARD", "-i", c.Bridge, "!", "-o", c.Bridge, "-j", "ACCEPT"},
+		{"FORWARD", "-o", c.Bridge, "-m", "conntrack", "--ctstate", "RELATED,ESTABLISHED", "-j", "ACCEPT"},
+	} {
+		check := append([]string{"iptables", "-C"}, r...)
+		insert := append([]string{"iptables", "-I"}, r...)
+		if err := runIgnore(check, ""); err != nil {
+			if err := run(insert); err != nil {
 				return err
 			}
 		}

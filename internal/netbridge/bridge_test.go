@@ -23,6 +23,15 @@ func TestSetupCommandsStayOnInternalBridge(t *testing.T) {
 	if strings.Contains(joined, "0.0.0.0") {
 		t.Fatal("must not bind a public host port")
 	}
+	if !strings.Contains(joined, "sysctl -w net.ipv4.ip_forward=1") {
+		t.Fatal("serve must enable ip_forward so VMs can NAT")
+	}
+	if !strings.Contains(joined, "-i br-ghrunnerd ! -o br-ghrunnerd -j ACCEPT") {
+		t.Fatal("VMs must be allowed off the bridge (Docker sets FORWARD DROP)")
+	}
+	if !strings.Contains(joined, "-o br-ghrunnerd -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT") {
+		t.Fatal("return traffic to VMs must be accepted")
+	}
 	if !strings.Contains(joined, "-i br-ghrunnerd -o br-ghrunnerd -j DROP") {
 		t.Fatal("vm-to-vm must be dropped")
 	}
