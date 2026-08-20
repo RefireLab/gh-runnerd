@@ -26,6 +26,7 @@ type DHCP struct {
 	conn    *net.UDPConn
 	log     *slog.Logger
 	lastErr error
+	iface   string
 }
 
 func NewDHCP(log *slog.Logger) *DHCP {
@@ -55,8 +56,14 @@ func (d *DHCP) Set(l Lease) {
 
 func (d *DHCP) Delete(mac string) {
 	d.mu.Lock()
-	defer d.mu.Unlock()
+	l, had := d.leases[normalizeMAC(mac)]
+	iface := d.iface
 	delete(d.leases, normalizeMAC(mac))
+	d.mu.Unlock()
+	if had && iface != "" && l.IP != nil {
+		// Drop the pinned neighbor entry from the unicast reply path.
+		_ = run([]string{"ip", "neigh", "del", l.IP.String(), "dev", iface})
+	}
 }
 
 func (d *DHCP) lookup(mac []byte) (Lease, bool) {
@@ -84,6 +91,7 @@ func (d *DHCP) ListenAndServe(iface string) error {
 	d.mu.Lock()
 	d.conn = conn
 	d.lastErr = nil
+	d.iface = iface
 	d.mu.Unlock()
 	if d.log != nil {
 		d.log.Info("dhcp listening", "iface", iface, "port", 67)
@@ -102,16 +110,47 @@ func (d *DHCP) ListenAndServe(iface string) error {
 			}
 			continue
 		}
-		dst := &net.UDPAddr{IP: net.IPv4bcast, Port: 68}
+		offered := net.IP(resp[16:20])
+		mac := net.HardwareAddr(resp[28:34])
 		if src != nil && !src.IP.IsUnspecified() && !src.IP.Equal(net.IPv4zero) {
-			dst = &net.UDPAddr{IP: src.IP, Port: 68}
+			dst := &net.UDPAddr{IP: src.IP, Port: 68}
+			if _, err := conn.WriteToUDP(resp, dst); err != nil && d.log != nil {
+				d.log.Warn("dhcp reply", "dst", dst.String(), "err", err)
+			} else if d.log != nil {
+				d.log.Info("dhcp reply", "ip", offered.String(), "mac", mac.String())
+			}
+			continue
 		}
-		if _, err := conn.WriteToUDP(resp, dst); err != nil && d.log != nil {
-			d.log.Warn("dhcp reply", "dst", dst.String(), "err", err)
-		} else if d.log != nil {
-			d.log.Info("dhcp reply", "ip", net.IP(resp[16:20]).String(), "mac", net.HardwareAddr(resp[28:34]).String())
+		// The client has no IP yet. Send the reply both ways: broadcast
+		// (classic path), and — dnsmasq-style — as L2 unicast to the
+		// client's MAC via an injected neighbor entry, which survives
+		// hosts where locally-generated broadcast never reaches bridge
+		// ports. Raw-socket clients (systemd-networkd in the VMs) accept
+		// either frame.
+		_, bcastErr := conn.WriteToUDP(resp, &net.UDPAddr{IP: net.IPv4bcast, Port: 68})
+		var uniErr error
+		if err := neighReplace(d.iface, offered, mac); err == nil {
+			_, uniErr = conn.WriteToUDP(resp, &net.UDPAddr{IP: offered, Port: 68})
+		} else {
+			uniErr = err
+		}
+		if d.log != nil {
+			if bcastErr != nil && uniErr != nil {
+				d.log.Warn("dhcp reply failed", "ip", offered.String(), "mac", mac.String(), "bcast_err", bcastErr, "unicast_err", uniErr)
+			} else {
+				d.log.Info("dhcp reply", "ip", offered.String(), "mac", mac.String())
+			}
 		}
 	}
+}
+
+// neighReplace pins ip→mac on iface so a unicast UDP reply reaches a
+// client that has not configured its address yet.
+func neighReplace(iface string, ip net.IP, mac net.HardwareAddr) error {
+	if iface == "" {
+		return fmt.Errorf("dhcp iface unknown")
+	}
+	return run([]string{"ip", "neigh", "replace", ip.String(), "lladdr", mac.String(), "dev", iface})
 }
 
 func (d *DHCP) Close() error {
