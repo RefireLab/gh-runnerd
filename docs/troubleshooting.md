@@ -22,7 +22,10 @@ gh-runnerd doctor
 | `registry listen ...: address already in use` | Another service owns that port. Re-run `sudo gh-runnerd init` (it picks a free port) or set `registry.listen = "10.87.0.1:42443"` in the config. |
 | VM network overlaps LAN/Docker/VPN | `gh-runnerd doctor` warns about it; re-run `sudo gh-runnerd init` and pick the suggested free subnet, then `sudo gh-runnerd runner-image update`. |
 | JIT runners stay Offline, `MASQUERADE` counter stays 0 | Docker/ufw set `FORWARD` policy `DROP`. `serve` inserts ACCEPT rules so VMs can NAT. Restart `serve` (v0.2.9+) or add them by hand: `iptables -I FORWARD -i br-ghrunnerd ! -o br-ghrunnerd -j ACCEPT`. |
+| Runner Offline although `status` shows `idle` | The VM has no IP. Images baked before v0.3.0 pinned netplan to the bake-time NIC (different PCI slot and MAC than at runtime), so networking never came up. Upgrade, then rebuild the image: `sudo gh-runnerd runner-image update`. |
+| `selftest ... FAILED` in the serve log | `serve` probes the VM datapath (DHCP, control port, DNS, TCP 443) from the bridge before booting runners. Each failing line names the broken hop and the fix. Runner creation pauses and resumes automatically once a re-probe passes; `gh-runnerd status` shows `network_egress`. |
 | Pool fills to `max` with `busy` and no jobs | Pre-0.2.9: guest `job_started` made warm VMs look busy, so `MaintainIdle` kept booting more. Upgrade. |
+| `Device or resource busy` on tap after restart | Pre-0.3.0 leftovers: killing `serve` orphaned QEMU processes holding the TAPs. `serve` now destroys its VMs on shutdown and removes orphans (matching `qemu-system.* -name <prefix>-N-N`), stale `tap-ghrd*`, and old overlays at startup. |
 
 Daemon logs go to stderr / journald:
 

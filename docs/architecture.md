@@ -16,6 +16,16 @@ Ubuntu host
           └── optional job container
 ```
 
+## Startup self-test
+
+Before booting any runner VM, `serve` cleans up orphans from a previous
+run (QEMU processes, `tap-ghrd*` devices, overlay disks) and probes the VM
+datapath through a network namespace attached to the real bridge: DHCP
+offer, guest control port, DNS via `1.1.1.1`, and TCP 443 egress. Failures
+are logged with a concrete fix and pause runner creation — otherwise every
+boot would mint an Offline JIT runner in GitHub. The probe re-runs each
+poll interval until it passes; `gh-runnerd status` reports `network_egress`.
+
 ## Job path
 
 1. GitHub App webhook `workflow_job` / `queued` (or poll fallback).

@@ -48,6 +48,22 @@ systemctl enable qemu-guest-agent.service || true
 systemctl enable gh-runnerd-guest.service
 systemctl disable cloud-init.service cloud-init-local.service cloud-config.service cloud-final.service || true
 touch /etc/cloud/cloud-init.disabled
+
+# cloud-init pinned netplan to the NIC it saw during bake (different PCI
+# slot and MAC than at runtime), so runtime VMs never brought networking
+# up. Replace it with a catch-all: any virtio NIC, DHCP from the host.
+rm -f /etc/netplan/50-cloud-init.yaml
+cat > /etc/netplan/50-gh-runnerd.yaml <<'NETPLAN'
+network:
+  version: 2
+  ethernets:
+    all-ethernet:
+      match:
+        name: "en*"
+      dhcp4: true
+      optional: true
+NETPLAN
+chmod 600 /etc/netplan/50-gh-runnerd.yaml
 `)
 	if hasExtraRuns {
 		b.WriteString("bash \"$SEED/runnerfile-runs.sh\"\n")

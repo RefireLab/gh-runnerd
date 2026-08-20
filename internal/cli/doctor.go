@@ -22,6 +22,7 @@ func doctorCmd() *cobra.Command {
 				return err
 			}
 			rep := doctor.Run(cfg)
+			rep.Checks = append(rep.Checks, doctor.EgressChecks(cfg)...)
 			printReport(cmd.OutOrStdout(), rep)
 			if rep.HasErrors() {
 				os.Exit(1)
