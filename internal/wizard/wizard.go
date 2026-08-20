@@ -155,6 +155,23 @@ func (p *Prompter) AskInt(label string, def int) (int, error) {
 	}
 }
 
+// AskIntRange prompts for an integer within [min, max]; empty input
+// returns def.
+func (p *Prompter) AskIntRange(label string, def, min, max int) (int, error) {
+	for {
+		line, err := p.Ask(label, strconv.Itoa(def))
+		if err != nil {
+			return def, err
+		}
+		n, convErr := strconv.Atoi(line)
+		if convErr != nil || n < min || n > max {
+			p.Say("please enter a number between %d and %d", min, max)
+			continue
+		}
+		return n, nil
+	}
+}
+
 // AskSecret prompts without echoing when stdin is a TTY.
 func (p *Prompter) AskSecret(label string) (string, error) {
 	fmt.Fprintf(p.out, "%s: ", label)
