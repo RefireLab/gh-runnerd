@@ -24,6 +24,10 @@ type Spec struct {
 	MAC        string
 	TAP        string
 	QEMUBinary string
+	// DisableVsock omits vhost-vsock-pci. Required when the host cannot
+	// listen on /dev/vsock: the guest agent dials vsock first and hangs
+	// instead of falling back to TCP on the isolated bridge.
+	DisableVsock bool
 }
 
 // CmdLine is the qemu-system argument vector (without the binary).
@@ -43,7 +47,7 @@ func CmdLine(spec Spec) []string {
 		"-netdev", fmt.Sprintf("tap,id=net0,ifname=%s,script=no,downscript=no", spec.TAP),
 		"-device", fmt.Sprintf("virtio-net-pci,netdev=net0,mac=%s", spec.MAC),
 	}
-	if spec.CID >= 3 {
+	if spec.CID >= 3 && !spec.DisableVsock {
 		args = append(args, "-device", fmt.Sprintf("vhost-vsock-pci,guest-cid=%d", spec.CID))
 	}
 	return args
@@ -87,6 +91,7 @@ func Start(ctx context.Context, spec Spec) (*Instance, error) {
 	if _, err := os.Stat("/dev/kvm"); err != nil {
 		return nil, fmt.Errorf("/dev/kvm is missing; gh-runnerd requires KVM on Ubuntu")
 	}
+	spec = applyVsockAvailability(spec)
 	cmd := exec.CommandContext(ctx, bin, CmdLine(spec)...)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	cmd.Stdout = os.Stdout
@@ -146,4 +151,19 @@ func DefaultBinary() string {
 func HasKVM() bool {
 	_, err := os.Stat("/dev/kvm")
 	return err == nil
+}
+
+// HostVsockAvailable reports whether the host can listen on AF_VSOCK.
+// /dev/vhost-vsock is enough for QEMU to *expose* vsock to the guest;
+// without /dev/vsock the host cannot accept, and the guest dial hangs.
+func HostVsockAvailable() bool {
+	_, err := os.Stat("/dev/vsock")
+	return err == nil
+}
+
+func applyVsockAvailability(spec Spec) Spec {
+	if !HostVsockAvailable() {
+		spec.DisableVsock = true
+	}
+	return spec
 }
