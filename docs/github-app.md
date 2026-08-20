@@ -20,7 +20,7 @@ Subscribe to the **Workflow job** webhook event.
 
 ## JIT runner groups
 
-`github.runner_group_id` defaults to `1` (the Default runner group). If your org uses custom groups, put that group's id in config.
+`github.runner_group_id` defaults to `1` (the Default runner group). `init` lists groups from the API and accepts a name or id. You can also set the id in config.
 
 ## Webhook
 
@@ -32,7 +32,7 @@ If GitHub cannot reach the host (lab NAT), leave the webhook unused. gh-runnerd 
 
 ## Labels
 
-Default runner label: `gh-runnerd`.
+Default runner label: `gh-runnerd`. `init` asks for a comma-separated list; keep `gh-runnerd` unique so these VMs do not take ordinary `self-hosted` jobs.
 
 ```yaml
 runs-on: gh-runnerd

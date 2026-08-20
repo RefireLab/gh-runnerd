@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/RefireLab/gh-runnerd/internal/config"
 	"github.com/RefireLab/gh-runnerd/internal/version"
 )
 
@@ -66,6 +67,38 @@ func TestInitCreatesLayoutAndCA(t *testing.T) {
 	}
 	if !strings.Contains(buf.String(), "Initialized") {
 		t.Fatalf("%s", buf.String())
+	}
+}
+
+func TestInitNonInteractiveLabelsAndGroup(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.toml")
+	cmd := Root()
+	cmd.SetArgs([]string{
+		"init",
+		"--non-interactive",
+		"--data-dir", filepath.Join(dir, "data"),
+		"--config", cfgPath,
+		"--owner", "acme",
+		"--repo", "app",
+		"--labels", "gh-runnerd, kvm",
+		"--runner-group", "12",
+	})
+	buf := &bytes.Buffer{}
+	cmd.SetOut(buf)
+	cmd.SetErr(buf)
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := config.Load(cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cfg.Runner.Labels) != 2 || cfg.Runner.Labels[1] != "kvm" {
+		t.Fatalf("labels %v", cfg.Runner.Labels)
+	}
+	if cfg.GitHub.RunnerGroupID != 12 {
+		t.Fatalf("group %d", cfg.GitHub.RunnerGroupID)
 	}
 }
 

@@ -10,6 +10,8 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/RefireLab/gh-runnerd/internal/config"
+	"github.com/RefireLab/gh-runnerd/internal/ghapi"
+	"github.com/RefireLab/gh-runnerd/internal/githubutil"
 	"github.com/RefireLab/gh-runnerd/internal/tlsutil"
 	"github.com/RefireLab/gh-runnerd/internal/wizard"
 )
@@ -20,6 +22,8 @@ type initPreset struct {
 	Repo         string
 	Org          string
 	Scope        string
+	Labels       string
+	RunnerGroup  string
 	WithExamples bool
 }
 
@@ -49,6 +53,8 @@ func initCmd() *cobra.Command {
 	cmd.Flags().StringVar(&preset.Repo, "repo", "", "GitHub repository for repo scope")
 	cmd.Flags().StringVar(&preset.Org, "org", "", "GitHub organization (sets scope=org)")
 	cmd.Flags().StringVar(&preset.Scope, "scope", "", "repo or org")
+	cmd.Flags().StringVar(&preset.Labels, "labels", "", "comma-separated runner labels (default gh-runnerd)")
+	cmd.Flags().StringVar(&preset.RunnerGroup, "runner-group", "", "runner group name or id (default Default / 1)")
 	cmd.Flags().BoolVar(&nonInteractive, "non-interactive", false, "no questions: write config and directories from flags only")
 	return cmd
 }
@@ -96,6 +102,18 @@ func runInitNonInteractive(cmd *cobra.Command, preset initPreset) error {
 	}
 	if preset.Scope != "" {
 		cfg.GitHub.Scope = preset.Scope
+	}
+	if preset.Labels != "" {
+		if labels := githubutil.ParseLabelList(preset.Labels); len(labels) > 0 {
+			cfg.Runner.Labels = labels
+		}
+	}
+	if preset.RunnerGroup != "" {
+		g, err := ghapi.ResolveRunnerGroup(nil, preset.RunnerGroup)
+		if err != nil {
+			return fmt.Errorf("runner-group: %w", err)
+		}
+		cfg.GitHub.RunnerGroupID = g.ID
 	}
 	if cfg.Webhook.Secret == "" {
 		cfg.Webhook.Secret = randomSecret()
