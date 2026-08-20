@@ -42,6 +42,11 @@ func normalizeLabel(s string) string {
 	return strings.ToLower(strings.TrimSpace(s))
 }
 
+// ParseLabelList splits a comma-separated label string and drops empties.
+func ParseLabelList(s string) []string {
+	return MergeLabels(nil, strings.Split(s, ","))
+}
+
 // MergeLabels returns unique labels, configured first, then extra from the job.
 func MergeLabels(configured, extra []string) []string {
 	seen := map[string]struct{}{}

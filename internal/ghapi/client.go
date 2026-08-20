@@ -84,6 +84,31 @@ func (c *Client) jitPath() string {
 	return fmt.Sprintf("/repos/%s/%s/actions/runners/generate-jitconfig", c.cfg.Owner, c.cfg.Repo)
 }
 
+// RunnerGroup is a GitHub Actions self-hosted runner group.
+type RunnerGroup struct {
+	ID      int64  `json:"id"`
+	Name    string `json:"name"`
+	Default bool   `json:"default"`
+}
+
+// ListRunnerGroups returns org or repo runner groups the token can see.
+func (c *Client) ListRunnerGroups(ctx context.Context) ([]RunnerGroup, error) {
+	var out struct {
+		RunnerGroups []RunnerGroup `json:"runner_groups"`
+	}
+	if err := c.do(ctx, http.MethodGet, c.runnerGroupsPath(), nil, &out); err != nil {
+		return nil, err
+	}
+	return out.RunnerGroups, nil
+}
+
+func (c *Client) runnerGroupsPath() string {
+	if strings.ToLower(c.cfg.Scope) == "org" {
+		return fmt.Sprintf("/orgs/%s/actions/runner-groups?per_page=100", c.cfg.Org)
+	}
+	return fmt.Sprintf("/repos/%s/%s/actions/runner-groups?per_page=100", c.cfg.Owner, c.cfg.Repo)
+}
+
 // QueuedJob is a workflow job waiting for a runner.
 type QueuedJob struct {
 	ID     int64    `json:"id"`

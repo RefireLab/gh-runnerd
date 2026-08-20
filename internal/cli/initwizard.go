@@ -14,6 +14,7 @@ import (
 	"github.com/RefireLab/gh-runnerd/internal/bake"
 	"github.com/RefireLab/gh-runnerd/internal/config"
 	"github.com/RefireLab/gh-runnerd/internal/ghapi"
+	"github.com/RefireLab/gh-runnerd/internal/githubutil"
 	"github.com/RefireLab/gh-runnerd/internal/host"
 	"github.com/RefireLab/gh-runnerd/internal/sysinstall"
 	"github.com/RefireLab/gh-runnerd/internal/wizard"
@@ -144,10 +145,14 @@ func runInitWizard(cmd *cobra.Command, p *wizard.Prompter, preset initPreset) er
 	p.Say("")
 	p.Say("Done! Point a workflow at your new runners:")
 	p.Say("")
+	runsOn := "gh-runnerd"
+	if len(cfg.Runner.Labels) > 0 {
+		runsOn = cfg.Runner.Labels[0]
+	}
 	p.Say("  # .github/workflows/ci.yml")
 	p.Say("  jobs:")
 	p.Say("    build:")
-	p.Say("      runs-on: gh-runnerd")
+	p.Say("      runs-on: %s", runsOn)
 	p.Say("      steps:")
 	p.Say("        - uses: actions/checkout@v4")
 	p.Say("        - run: echo it works")
@@ -224,6 +229,13 @@ func askConfigQuestions(ctx context.Context, p *wizard.Prompter, preset initPres
 	cfg.GitHub.Token = token
 
 	if err := askRunnerTarget(ctx, p, &cfg, preset, login); err != nil {
+		return config.Config{}, err
+	}
+
+	if err := askLabels(p, &cfg); err != nil {
+		return config.Config{}, err
+	}
+	if err := askRunnerGroup(ctx, p, &cfg); err != nil {
 		return config.Config{}, err
 	}
 
@@ -366,6 +378,73 @@ func askRunnerTarget(ctx context.Context, p *wizard.Prompter, cfg *config.Config
 		return nil
 	}
 	p.Say("could not confirm runner access — fix github.* in the config later, then run gh-runnerd doctor")
+	return nil
+}
+
+func askLabels(p *wizard.Prompter, cfg *config.Config) error {
+	p.Say("")
+	p.Say("Runner labels")
+	p.Say("Jobs pick these VMs with runs-on: <label>. Keep gh-runnerd as a unique")
+	p.Say("label so they do not steal ordinary self-hosted / Linux jobs.")
+	def := strings.Join(cfg.Runner.Labels, ", ")
+	if def == "" {
+		def = "gh-runnerd"
+	}
+	raw, err := p.Ask("Labels (comma-separated)", def)
+	if err != nil {
+		return err
+	}
+	labels := githubutil.ParseLabelList(raw)
+	if len(labels) == 0 {
+		labels = []string{"gh-runnerd"}
+	}
+	cfg.Runner.Labels = labels
+	p.Say("[ok] labels: %s", strings.Join(labels, ", "))
+	return nil
+}
+
+func askRunnerGroup(ctx context.Context, p *wizard.Prompter, cfg *config.Config) error {
+	p.Say("")
+	p.Say("Runner group (where they appear in the GitHub org/repo settings)")
+	var groups []ghapi.RunnerGroup
+	if cfg.GitHub.Token != "" && (cfg.GitHub.Org != "" || (cfg.GitHub.Owner != "" && cfg.GitHub.Repo != "")) {
+		listed, err := ghapi.New(cfg.GitHub).ListRunnerGroups(ctx)
+		if err != nil {
+			p.Say("[!!] could not list runner groups (%v) — Default (id 1) is the usual choice", shortErr(err))
+		} else {
+			groups = listed
+			for _, g := range groups {
+				mark := ""
+				if g.Default {
+					mark = " — default"
+				}
+				p.Say("  %s (id %d)%s", g.Name, g.ID, mark)
+			}
+		}
+	}
+	def := "Default"
+	for _, g := range groups {
+		if g.Default {
+			def = g.Name
+			break
+		}
+	}
+	for i := 0; i < 3; i++ {
+		ans, err := p.Ask("Runner group (name or id)", def)
+		if err != nil {
+			return err
+		}
+		g, rerr := ghapi.ResolveRunnerGroup(groups, ans)
+		if rerr != nil {
+			p.Say("[!!] %v", rerr)
+			continue
+		}
+		cfg.GitHub.RunnerGroupID = g.ID
+		p.Say("[ok] runner group %s (id %d)", g.Name, g.ID)
+		return nil
+	}
+	p.Say("using Default (id 1) — change github.runner_group_id in the config later")
+	cfg.GitHub.RunnerGroupID = 1
 	return nil
 }
 

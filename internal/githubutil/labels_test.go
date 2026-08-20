@@ -29,6 +29,17 @@ func TestOwnsJob(t *testing.T) {
 	}
 }
 
+func TestParseLabelList(t *testing.T) {
+	t.Parallel()
+	got := ParseLabelList(" gh-runnerd, kvm, gh-runnerd ,")
+	if len(got) != 2 || got[0] != "gh-runnerd" || got[1] != "kvm" {
+		t.Fatalf("got %v", got)
+	}
+	if ParseLabelList("  , ") != nil {
+		t.Fatal("empty input should yield no labels")
+	}
+}
+
 func TestMergeLabels(t *testing.T) {
 	t.Parallel()
 	got := MergeLabels([]string{"gh-runnerd"}, []string{"gh-runnerd", "linux"})
