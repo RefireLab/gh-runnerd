@@ -1,8 +1,10 @@
 package cli
 
 import (
+	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 
 	"github.com/spf13/cobra"
 
@@ -45,25 +47,35 @@ func flagStr(cmd *cobra.Command, name string) string {
 }
 
 func loadConfigOptional(cmd *cobra.Command) (config.Config, error) {
+	cfg, _, err := loadConfigOptionalPath(cmd)
+	return cfg, err
+}
+
+// loadConfigOptionalPath is loadConfigOptional plus the path of the config
+// file that was loaded — empty when none was found and the built-in
+// defaults are in use.
+func loadConfigOptionalPath(cmd *cobra.Command) (config.Config, string, error) {
 	cfg := config.Defaults()
-	explicit := flagStr(cmd, "config")
-	if explicit != "" {
-		loaded, err := config.Load(explicit)
-		if err != nil {
-			return config.Config{}, err
+	path := flagStr(cmd, "config")
+	if path == "" {
+		if found, err := config.Find(""); err == nil {
+			path = found
 		}
-		cfg = loaded
-	} else if path, err := config.Find(""); err == nil {
+	}
+	if path != "" {
 		loaded, err := config.Load(path)
 		if err != nil {
-			return config.Config{}, err
+			if errors.Is(err, fs.ErrPermission) {
+				return config.Config{}, "", fmt.Errorf("config %s is not readable by this user — run with sudo: %w", path, err)
+			}
+			return config.Config{}, "", err
 		}
 		cfg = loaded
 	}
 	if d := flagStr(cmd, "data-dir"); d != "" {
 		cfg.DataDir = d
 	}
-	return cfg, nil
+	return cfg, path, nil
 }
 
 func loadConfigRequired(cmd *cobra.Command) (config.Config, string, error) {

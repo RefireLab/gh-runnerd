@@ -111,17 +111,23 @@ func Run(cfg config.Config) Report {
 		add(Check{"ca", Warn, "internal CA missing — run gh-runnerd init"})
 	}
 
+	// Mirror the daemon's image resolution: the configured template first
+	// (Find maps bare family names like ubuntu-26.04 to the arch-suffixed
+	// file), then whatever image is active.
 	cat := images.Catalog{Dir: dirs.Runner}
-	name := cfg.VM.Template
-	if name == "ubuntu-24.04" {
-		name = images.DefaultName()
-	}
-	if img, err := cat.Find(name); err == nil {
+	tmpl := cfg.VM.Template
+	if img, err := cat.Find(tmpl); err == nil {
 		add(Check{"runner-image", OK, img.Path})
-	} else if _, err := cat.Active(); err == nil {
-		add(Check{"runner-image", OK, "active template present"})
+	} else if act, err := cat.Active(); err == nil {
+		add(Check{"runner-image", OK, fmt.Sprintf("%s (active) — vm.template %q is not baked; serve uses the active image", act.Name, tmpl)})
+	} else if list, _ := cat.List(); len(list) > 0 {
+		names := make([]string, 0, len(list))
+		for _, img := range list {
+			names = append(names, img.Name)
+		}
+		add(Check{"runner-image", Error, fmt.Sprintf("no active runner image for vm.template %q; found %s — run: gh-runnerd runner-image activate <name>", tmpl, strings.Join(names, ", "))})
 	} else {
-		add(Check{"runner-image", Error, fmt.Sprintf("no Ubuntu 24.04 runner image in %s — run: gh-runnerd runner-image bake", dirs.Runner)})
+		add(Check{"runner-image", Error, fmt.Sprintf("no runner image for vm.template %q in %s — run: sudo gh-runnerd runner-image bake", tmpl, dirs.Runner)})
 	}
 
 	if cfg.HasGitHubAuth() {
