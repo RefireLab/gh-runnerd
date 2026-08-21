@@ -14,6 +14,7 @@ Every job runs in a **fresh disposable virtual machine** with Docker inside. Whe
 - **GitHub's own images, on your hardware.** The bake can run the build scripts from [actions/runner-images](https://github.com/actions/runner-images) — the very repository GitHub builds `ubuntu-latest` from — so your VMs carry the same git, gh, node, python, cmake, docker tooling. Pick `ubuntu-24.04`, `ubuntu-26.04`, or `ubuntu-22.04` and how much of it you want.
 - **Container images pulled once, reused forever.** An embedded pull-only registry on an isolated bridge caches Docker Hub / GHCR / Quay pulls, so a `docker pull` your workflows do on every run is instant and rate-limit-proof. Local `docker save` tarballs work too: `gh-runnerd.local/my-ci:1.0`.
 - **It diagnoses itself.** `doctor` checks the host; `serve` probes the whole VM datapath (DHCP, control channel, DNS, TCP 443) before booting a single runner, logs a concrete fix when something is broken, and pauses runner creation instead of minting Offline runners in GitHub.
+- **It cleans up after itself — in GitHub too.** Destroyed VMs are deregistered immediately, and a periodic sweep deletes the Offline registrations a crash or reboot left behind, so the runner list stays clean. `gh-runnerd runners cleanup` purges by hand whenever you want.
 - **Warm pool.** Keep 0..N VMs booted and waiting so jobs start in seconds; everything else boots on demand.
 - **Webhook or polling.** A GitHub App webhook when your host is reachable, plain polling when it is behind NAT. Both work out of the box.
 
@@ -111,6 +112,8 @@ jobs:
 |---|---|
 | Check that everything is healthy | `gh-runnerd doctor` |
 | See the pool and network state | `gh-runnerd status` |
+| See every runner registered in GitHub | `gh-runnerd runners list` |
+| Purge stale Offline runners from GitHub now | `gh-runnerd runners cleanup` (add `--idle` for dead runners GitHub still shows Idle) |
 | See the service | `systemctl status gh-runnerd` |
 | See live logs | `journalctl -u gh-runnerd -f` |
 | Rebuild the VM image (newest Ubuntu + runner + tools) | `sudo gh-runnerd runner-image update` |

@@ -40,6 +40,23 @@ are logged with a concrete fix and pause runner creation — otherwise every
 boot would mint an Offline JIT runner in GitHub. The probe re-runs each
 poll interval until it passes; `gh-runnerd status` reports `network_egress`.
 
+## Stale runner cleanup
+
+The GitHub side is cleaned up too — GitHub itself keeps a dead JIT
+registration visible for about a day. Whenever a VM is destroyed
+(job done, idle recycle, boot failure, graceful shutdown) the daemon
+deregisters its runner from GitHub right away. What that cannot cover — a
+killed daemon, a host reboot — a sweeper reconciles: every
+`runner.cleanup_interval` (default 3m) it lists the scope's runners and
+deletes registrations that match this daemon's name format
+(`<prefix>-N-N`), are offline, not busy, do not belong to a live VM, and
+have stayed that way for two sweeps at least two minutes apart. The grace
+pass means a runner that is briefly offline while its VM boots — here or
+on another host sharing the prefix — is never touched. Manually
+registered runners are never touched either; for a manual purge (including
+runners a dead host still shows as Idle) there is
+`gh-runnerd runners cleanup`.
+
 ## Job path
 
 1. GitHub App webhook `workflow_job` / `queued` (or poll fallback).

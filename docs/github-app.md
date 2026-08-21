@@ -16,6 +16,10 @@ Organization:
 - **Self-hosted runners**: Read and write
 - **Administration** as required by your org's runner groups
 
+The same permissions cover listing and deleting runners, so the automatic
+stale-runner cleanup and `gh-runnerd runners list` / `runners cleanup`
+need nothing extra.
+
 Subscribe to the **Workflow job** webhook event.
 
 ## JIT runner groups
