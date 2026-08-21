@@ -85,7 +85,7 @@ func (c Catalog) Active() (RunnerImage, error) {
 		return RunnerImage{}, err
 	}
 	if m.Active == "" {
-		return RunnerImage{}, fmt.Errorf("no runner image is active; import or bake ubuntu-24.04 first")
+		return RunnerImage{}, fmt.Errorf("no runner image is active; bake or import one first (gh-runnerd runner-image bake)")
 	}
 	for _, img := range m.Images {
 		if img.Name == m.Active {
@@ -98,14 +98,6 @@ func (c Catalog) Active() (RunnerImage, error) {
 
 // familyNameRe matches bare upstream family names like ubuntu-24.04.
 var familyNameRe = regexp.MustCompile(`^ubuntu-\d{2}\.\d{2}$`)
-
-// DefaultName is the shipped Ubuntu template for this host architecture.
-func DefaultName() string {
-	if runtime.GOARCH == "arm64" {
-		return "ubuntu-24.04-arm64"
-	}
-	return "ubuntu-24.04-amd64"
-}
 
 // Import copies a qcow2 into the catalog, checksums it, and records it.
 func (c Catalog) Import(src, name string) (RunnerImage, error) {

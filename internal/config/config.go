@@ -392,6 +392,9 @@ func WriteFile(path string, cfg Config) error {
 	return os.WriteFile(path, raw, 0o600)
 }
 
+// SystemPath is where a system-service install keeps its config.
+const SystemPath = "/etc/gh-runnerd/config.toml"
+
 // Find looks for a config file from flags, CWD, and /etc.
 func Find(explicit string) (string, error) {
 	if explicit != "" {
@@ -400,7 +403,7 @@ func Find(explicit string) (string, error) {
 	candidates := []string{
 		"gh-runnerd.toml",
 		filepath.Join(".", "gh-runnerd.toml"),
-		"/etc/gh-runnerd/config.toml",
+		SystemPath,
 	}
 	if home, err := os.UserHomeDir(); err == nil {
 		candidates = append(candidates, filepath.Join(home, ".config", "gh-runnerd", "config.toml"))
