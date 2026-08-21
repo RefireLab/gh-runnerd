@@ -29,6 +29,7 @@ by RefireLab
 	cmd.AddCommand(doctorCmd())
 	cmd.AddCommand(serveCmd())
 	cmd.AddCommand(statusCmd())
+	cmd.AddCommand(runnersCmd())
 	cmd.AddCommand(imageCmd())
 	cmd.AddCommand(runnerImageCmd())
 	return cmd
