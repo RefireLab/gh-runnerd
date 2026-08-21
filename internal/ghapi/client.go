@@ -232,12 +232,25 @@ func (c *Client) do(ctx context.Context, method, path string, body []byte, dest 
 		return err
 	}
 	if resp.StatusCode >= 300 {
-		return fmt.Errorf("github %s %s: %s: %s", method, path, resp.Status, truncate(raw, 400))
+		return &APIError{Method: method, Path: path, StatusCode: resp.StatusCode, Status: resp.Status, Body: truncate(raw, 400)}
 	}
 	if dest == nil {
 		return nil
 	}
 	return json.Unmarshal(raw, dest)
+}
+
+// APIError is a non-2xx GitHub API response.
+type APIError struct {
+	Method     string
+	Path       string
+	StatusCode int
+	Status     string
+	Body       string
+}
+
+func (e *APIError) Error() string {
+	return fmt.Sprintf("github %s %s: %s: %s", e.Method, e.Path, e.Status, e.Body)
 }
 
 func truncate(b []byte, n int) string {
