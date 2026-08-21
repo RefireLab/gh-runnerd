@@ -40,6 +40,7 @@ type VM struct {
 	StartedAt time.Time `json:"started_at"`
 	JITAt     time.Time `json:"jit_at"`
 	JobID     int64     `json:"job_id,omitempty"`
+	RunnerID  int64     `json:"runner_id,omitempty"`
 	inst      *qemu.Instance
 	sess      *guest.Session
 }
@@ -55,6 +56,7 @@ type Status struct {
 // Backend is the side-effecting world the pool talks to. Tests stub it.
 type Backend interface {
 	GenerateJIT(ctx context.Context, name string, labels []string) (ghapi.JITResult, error)
+	RemoveRunner(ctx context.Context, id int64) error
 	StartVM(ctx context.Context, spec qemu.Spec) (*qemu.Instance, error)
 	WaitGuest(ctx context.Context) (*guest.Session, error)
 	CreateTAP(bridge, tap string) error
@@ -268,6 +270,9 @@ func (m *Manager) finishBoot(ctx context.Context, vm *VM, labels []string) {
 		m.destroy(vm)
 		return
 	}
+	m.mu.Lock()
+	vm.RunnerID = jit.Runner.ID
+	m.mu.Unlock()
 	if err := sess.SendJIT(jit.Encoded); err != nil {
 		m.log.Error("send jit failed", "vm", vm.Name, "err", err)
 		m.destroy(vm)
@@ -298,6 +303,19 @@ func (m *Manager) finishBoot(ctx context.Context, vm *VM, labels []string) {
 	}()
 }
 
+// ActiveNames returns the names of every VM the pool currently tracks,
+// including ones still booting. The daemon sweeper skips them so a runner
+// registration belonging to a live VM is never removed.
+func (m *Manager) ActiveNames() map[string]bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	names := make(map[string]bool, len(m.vms))
+	for name := range m.vms {
+		names[name] = true
+	}
+	return names
+}
+
 // DestroyAll tears down every VM. Called on daemon shutdown so QEMU
 // processes and TAP devices never outlive the daemon.
 func (m *Manager) DestroyAll() {
@@ -315,6 +333,8 @@ func (m *Manager) DestroyAll() {
 func (m *Manager) destroy(vm *VM) {
 	m.mu.Lock()
 	vm.State = StateDead
+	runnerID := vm.RunnerID
+	vm.RunnerID = 0
 	m.mu.Unlock()
 	if vm.sess != nil {
 		_ = vm.sess.Shutdown()
@@ -329,6 +349,19 @@ func (m *Manager) destroy(vm *VM) {
 	m.mu.Lock()
 	delete(m.vms, vm.Name)
 	m.mu.Unlock()
+	// Deregister from GitHub so the registration never lingers Offline (or
+	// Idle for a killed runner: GitHub needs minutes to notice the broken
+	// connection). After a completed job GitHub removes the ephemeral
+	// runner itself; that answers 404, which RemoveRunner treats as done.
+	if runnerID != 0 {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		if err := m.backend.RemoveRunner(ctx, runnerID); err != nil {
+			m.log.Warn("deregister runner in GitHub", "vm", vm.Name, "runner_id", runnerID, "err", err)
+		} else {
+			m.log.Info("deregistered runner in GitHub", "vm", vm.Name, "runner_id", runnerID)
+		}
+	}
 }
 
 func parseIPv4(s string) net.IP {
