@@ -437,9 +437,9 @@ func bootBakeVM(ctx context.Context, o Options, base, seedISO, seedDir, consoleL
 	cmd.Stderr = sink
 
 	if o.HostedSetup != "" {
-		o.say(">> building the VM image with GitHub hosted-runner software — this can take a long time")
+		o.say(">> building the VM image with GitHub hosted-runner software — usually 10-30 minutes, needs internet")
 	} else {
-		o.say(">> building the VM image — usually 10-20 minutes, needs internet")
+		o.say(">> building the VM image — usually 3-5 minutes, needs internet")
 	}
 	if !o.Verbose {
 		o.say("   (progress log: %s)", consoleLog)

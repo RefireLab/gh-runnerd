@@ -537,9 +537,9 @@ func askImageChoice(cmd *cobra.Command, p *wizard.Prompter, cfg *config.Config) 
 		// keep 0
 	}
 	idx, err := p.Select("Which software should the runner VMs carry?", []string{
-		"minimal   — Docker + runner only (~2 GB image, 10-20 min build)",
-		"essential — the everyday tools from GitHub's runner images: git, gh, node, python, cmake, docker... (~10 GB image, ~1-2 h build)",
-		"full      — everything GitHub's ubuntu-latest ships: browsers, JDKs, Android, CodeQL... (~60-80 GB image, needs ~130 GB free, many hours)",
+		"minimal   — Docker + runner only (~2 GB image, 3-5 min build)",
+		"essential — the everyday tools from GitHub's runner images: git, gh, node, python, cmake, docker... (~10 GB image, ~10 min build)",
+		"full      — everything GitHub's ubuntu-latest ships: browsers, JDKs, Android, CodeQL... (~60-80 GB image, needs ~130 GB free, ~30 min build)",
 	}, flavorDefault)
 	if err != nil {
 		return runnerimages.FlavorMinimal, firstNonEmptyStr(cfg.Image.Upstream, "ubuntu-24.04")

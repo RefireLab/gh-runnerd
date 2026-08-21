@@ -13,9 +13,9 @@ What else it contains is the **flavor**:
 
 | Flavor | Contents | Image size | Bake time |
 |---|---|---|---|
-| `minimal` (default) | base + git, curl, jq, tar, unzip | ~2 GB | 10-20 min |
-| `essential` | + the everyday tools from GitHub's own images: git/git-lfs/gh, node + nvm, python + pipx, cmake, ninja, gcc/g++, zstd, yq, PowerShell, Docker plugins (buildx, compose) | ~10 GB | ~1-2 h |
-| `full` | every script GitHub's `ubuntu-latest` runs: browsers, JDKs, Android SDK, CodeQL, .NET, Go/Rust/Ruby/PHP, toolcache, clouds... | ~60-80 GB | many hours, needs ~130 GB free |
+| `minimal` (default) | base + git, curl, jq, tar, unzip | ~2 GB | 3-5 min |
+| `essential` | + the everyday tools from GitHub's own images: git/git-lfs/gh, node + nvm, python + pipx, cmake, ninja, gcc/g++, zstd, yq, PowerShell, Docker plugins (buildx, compose) | ~10 GB | ~10 min |
+| `full` | every script GitHub's `ubuntu-latest` runs: browsers, JDKs, Android SDK, CodeQL, .NET, Go/Rust/Ruby/PHP, toolcache, clouds... | ~60-80 GB | ~30 min, needs ~130 GB free |
 
 `essential` and `full` do not reimplement anything: the bake downloads a pinned **release of [actions/runner-images](https://github.com/actions/runner-images)** — the very repository GitHub builds its hosted VMs from — and executes the same build scripts inside the QEMU VM (no Packer, no Azure). Pick the upstream image and flavor:
 

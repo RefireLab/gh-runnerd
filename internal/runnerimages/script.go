@@ -10,8 +10,8 @@ import (
 // like the upstream Packer file provisioners do and then runs the plan's
 // steps in order.
 //
-// Failure policy: one broken installer should not throw away hours of
-// baking, so non-critical script failures are recorded and reported while
+// Failure policy: one broken installer should not throw away a whole
+// bake, so non-critical script failures are recorded and reported while
 // the bake continues; scripts in criticalScripts abort the bake.
 func (p Plan) SetupScript() string {
 	var b strings.Builder

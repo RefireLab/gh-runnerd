@@ -104,7 +104,7 @@ sudo gh-runnerd doctor
 sudo gh-runnerd serve --config /etc/gh-runnerd/config.toml
 ```
 
-The VM image bake is built into the binary (`runner-image bake`): it downloads the Ubuntu cloud image, installs Docker + the GitHub Actions runner + the guest agent inside a throwaway VM, and activates the result. Once per machine, 10-20 minutes. Add `--flavor essential` (or `full`) to also run GitHub's own [actions/runner-images](https://github.com/actions/runner-images) build scripts so the VM carries the `ubuntu-latest` toolset — see [runner-images.md](runner-images.md).
+The VM image bake is built into the binary (`runner-image bake`): it downloads the Ubuntu cloud image, installs Docker + the GitHub Actions runner + the guest agent inside a throwaway VM, and activates the result. Once per machine, 3-5 minutes. Add `--flavor essential` (or `full`) to also run GitHub's own [actions/runner-images](https://github.com/actions/runner-images) build scripts so the VM carries the `ubuntu-latest` toolset — see [runner-images.md](runner-images.md).
 
 Prefer a GitHub App for production credentials ([github-app.md](github-app.md)).
 
