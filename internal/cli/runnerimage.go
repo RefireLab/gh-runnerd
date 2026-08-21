@@ -259,12 +259,12 @@ func runnerAvailableCmd() *cobra.Command {
 				fmt.Fprintf(out, "%-14s %-28s sudo gh-runnerd runner-image bake --image %s --flavor essential\n", family, tag, family)
 			}
 			fmt.Fprintln(out, "\nFlavors:")
-			fmt.Fprintln(out, "  minimal    Docker + runner only (~2 GB image, 10-20 min)")
+			fmt.Fprintln(out, "  minimal    Docker + runner only (~2 GB image, 3-5 min)")
 			fmt.Fprintln(out, "  essential  + the everyday tools from GitHub's images: git, gh, node,")
-			fmt.Fprintln(out, "             python, cmake, docker plugins, ... (~10 GB image, ~1-2 h)")
+			fmt.Fprintln(out, "             python, cmake, docker plugins, ... (~10 GB image, ~10 min)")
 			fmt.Fprintln(out, "  full       everything GitHub's ubuntu-latest ships — browsers, JDKs,")
 			fmt.Fprintln(out, "             Android SDK, CodeQL, toolcache... (~60-80 GB image, needs")
-			fmt.Fprintln(out, "             ~130 GB free disk, takes hours)")
+			fmt.Fprintln(out, "             ~130 GB free disk, ~30 min)")
 			return nil
 		},
 	}
@@ -369,7 +369,7 @@ func pickQcow2(cmd *cobra.Command, p *wizard.Prompter) (string, error) {
 	sort.Strings(matches)
 	if len(matches) == 0 {
 		p.Say("No .qcow2 files in this folder.")
-		yes, err := p.AskYesNo("Build the standard Ubuntu 24.04 image instead? (~600 MB download, 10-20 min)", true)
+		yes, err := p.AskYesNo("Build the standard Ubuntu 24.04 image instead? (~600 MB download, 3-5 min)", true)
 		if err != nil || !yes {
 			p.Say("nothing imported — put a .qcow2 file here or run: gh-runnerd runner-image bake")
 			return "", err

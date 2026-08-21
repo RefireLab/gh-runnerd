@@ -26,7 +26,7 @@ const (
 	// the everyday tools (git, gh, node, python, cmake, docker, ...).
 	FlavorEssential Flavor = "essential"
 	// FlavorFull runs every upstream build script — the whole
-	// ubuntu-latest kitchen sink. Tens of gigabytes, hours of baking.
+	// ubuntu-latest kitchen sink. Tens of gigabytes, ~30 minutes of baking.
 	FlavorFull Flavor = "full"
 )
 

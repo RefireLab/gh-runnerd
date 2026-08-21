@@ -65,9 +65,9 @@ The default VM is minimal Ubuntu + Docker + the runner. If your workflows expect
 
 | Flavor | What's inside | Image | Bake time |
 |---|---|---|---|
-| `minimal` (default) | Docker + runner + git/curl/jq | ~2 GB | 10-20 min |
-| `essential` | + everyday tools from GitHub's images: git/git-lfs/gh, node + nvm, python + pipx, cmake, ninja, gcc, zstd, yq, pwsh, docker plugins | ~10 GB | ~1-2 h |
-| `full` | everything `ubuntu-latest` ships: browsers, JDKs, Android SDK, CodeQL, toolcache... | ~60-80 GB | hours, ~130 GB free disk |
+| `minimal` (default) | Docker + runner + git/curl/jq | ~2 GB | 3-5 min |
+| `essential` | + everyday tools from GitHub's images: git/git-lfs/gh, node + nvm, python + pipx, cmake, ninja, gcc, zstd, yq, pwsh, docker plugins | ~10 GB | ~10 min |
+| `full` | everything `ubuntu-latest` ships: browsers, JDKs, Android SDK, CodeQL, toolcache... | ~60-80 GB | ~30 min, ~130 GB free disk |
 
 ```bash
 gh-runnerd runner-image available    # which GitHub images can I mirror?
