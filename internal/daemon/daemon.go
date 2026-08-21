@@ -170,8 +170,12 @@ func (d *Daemon) Run(ctx context.Context) error {
 	defer ticker.Stop()
 	statusTick := time.NewTicker(3 * time.Second)
 	defer statusTick.Stop()
+	cleanupTick := time.NewTicker(d.Cfg.CleanupInterval())
+	defer cleanupTick.Stop()
 
 	d.cleanupOrphans()
+	sweep := newSweeper(d.client, d.Cfg.Runner.NamePrefix, d.pool.ActiveNames, d.Log)
+	sweep.sweep(ctx)
 	d.runSelftest()
 
 	if d.egressState() != "failed" {
@@ -204,6 +208,8 @@ func (d *Daemon) Run(ctx context.Context) error {
 			if err := d.pool.MaintainIdle(ctx); err != nil {
 				d.Log.Warn("maintain idle", "err", err)
 			}
+		case <-cleanupTick.C:
+			sweep.sweep(ctx)
 		case <-statusTick.C:
 			d.writeStatus()
 		}
@@ -347,6 +353,10 @@ type liveBackend struct {
 
 func (b *liveBackend) GenerateJIT(ctx context.Context, name string, labels []string) (ghapi.JITResult, error) {
 	return b.d.client.GenerateJITConfig(ctx, name, labels)
+}
+
+func (b *liveBackend) RemoveRunner(ctx context.Context, id int64) error {
+	return b.d.client.RemoveRunner(ctx, id)
 }
 
 func (b *liveBackend) StartVM(ctx context.Context, spec qemu.Spec) (*qemu.Instance, error) {

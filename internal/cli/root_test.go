@@ -21,7 +21,7 @@ func TestRootHelp(t *testing.T) {
 		t.Fatal(err)
 	}
 	out := buf.String()
-	for _, s := range []string{"init", "doctor", "serve", "image", "runner-image"} {
+	for _, s := range []string{"init", "doctor", "serve", "runners", "image", "runner-image"} {
 		if !strings.Contains(out, s) {
 			t.Fatalf("help missing %s:\n%s", s, out)
 		}

@@ -49,6 +49,10 @@ type GitHubConfig struct {
 type RunnerConfig struct {
 	Labels     []string `toml:"labels"`
 	NamePrefix string   `toml:"name_prefix"`
+	// CleanupInterval is how often the daemon sweeps stale runner
+	// registrations (Offline leftovers of crashed VMs or a killed daemon)
+	// out of GitHub. Non-positive means the default.
+	CleanupInterval duration `toml:"cleanup_interval"`
 }
 
 type PoolConfig struct {
@@ -128,8 +132,9 @@ func Defaults() Config {
 			PollInterval:  duration{15 * time.Second},
 		},
 		Runner: RunnerConfig{
-			Labels:     []string{"gh-runnerd"},
-			NamePrefix: "gh-runnerd",
+			Labels:          []string{"gh-runnerd"},
+			NamePrefix:      "gh-runnerd",
+			CleanupInterval: duration{3 * time.Minute},
 		},
 		Pool: PoolConfig{
 			MinIdle:          0,
@@ -316,6 +321,15 @@ func hasControlChars(s string) bool {
 // Layout returns the data-directory map for this config.
 func (c Config) Layout() layout.Dirs {
 	return layout.New(c.DataDir)
+}
+
+// CleanupInterval returns runner.cleanup_interval, defaulting to three
+// minutes when unset or non-positive.
+func (c Config) CleanupInterval() time.Duration {
+	if c.Runner.CleanupInterval.Duration > 0 {
+		return c.Runner.CleanupInterval.Duration
+	}
+	return 3 * time.Minute
 }
 
 // MemoryMB returns vm.memory in mebibytes.
