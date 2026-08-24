@@ -131,6 +131,33 @@ jobs:
 3. Re-run `sudo gh-runnerd init` — it is safe to run again; it keeps your config if you want.
 4. Still stuck? [docs/troubleshooting.md](docs/troubleshooting.md).
 
+## Upgrade
+
+Three steps, in this order:
+
+```bash
+# 1. Update both binaries to the latest release
+curl -fsSL https://raw.githubusercontent.com/RefireLab/gh-runnerd/main/scripts/install-binary.sh | sudo bash
+
+# 2. Rebuild the VM image so the in-VM agent is updated too
+#    (safe while the old daemon is still running: the image is replaced
+#    atomically and live VMs keep the old one)
+sudo gh-runnerd runner-image update
+
+# 3. Restart the daemon — pick a quiet moment: a restart tears down VMs
+#    that are mid-job, and those jobs fail
+sudo systemctl restart gh-runnerd
+```
+
+Verify with `gh-runnerd --version` and `gh-runnerd doctor`. Step 2 matters:
+the guest agent is baked into the VM image, so skipping it leaves new
+daemon + old agent (they stay compatible, but fixes and features that live
+in the agent only arrive with a rebake).
+
+Portable mode (no system service): download the new tar.gz over the old
+binaries in your folder, run `sudo ./gh-runnerd runner-image update`, then
+restart `sudo ./gh-runnerd serve`.
+
 ## Remove it
 
 ```bash
