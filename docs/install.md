@@ -108,6 +108,34 @@ The VM image bake is built into the binary (`runner-image bake`): it downloads t
 
 Prefer a GitHub App for production credentials ([github-app.md](github-app.md)).
 
+## Upgrade
+
+Order matters: binaries first, then the image, then the restart.
+
+```bash
+# 1. Both binaries, from the latest release
+curl -fsSL https://raw.githubusercontent.com/RefireLab/gh-runnerd/main/scripts/install-binary.sh | sudo bash
+
+# 2. Rebuild the VM image: the guest agent is baked into it, and the bake
+#    picks up the gh-runnerd-guest just installed next to the CLI. Safe
+#    while the old daemon is still serving — the image file is replaced
+#    atomically, running VMs keep the previous one.
+sudo gh-runnerd runner-image update
+
+# 3. Restart in a quiet window: a restart tears down VMs mid-job.
+sudo systemctl restart gh-runnerd
+
+gh-runnerd --version && gh-runnerd doctor
+```
+
+A daemon upgrade without step 2 still runs (the control protocol tolerates
+version skew in both directions), but agent-side fixes only reach the VMs
+after a rebake.
+
+Portable mode: download the new `gh-runnerd_*_linux_*.tar.gz` into your
+folder over the old binaries, run `sudo ./gh-runnerd runner-image update`,
+restart `sudo ./gh-runnerd serve`.
+
 ## Releasing (maintainers)
 
 Releases are tag-driven and built by GoReleaser in CI ([.github/workflows/release.yml](../.github/workflows/release.yml), config in [.goreleaser.yaml](../.goreleaser.yaml)):
