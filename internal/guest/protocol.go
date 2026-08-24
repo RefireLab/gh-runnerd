@@ -49,7 +49,11 @@ type Conn struct {
 
 // NewConn wraps a stream (vsock or TCP).
 func NewConn(rw io.ReadWriter) *Conn {
-	return &Conn{rw: rw, scan: bufio.NewScanner(rw)}
+	scan := bufio.NewScanner(rw)
+	// The default 64KB token cap would permanently break the channel on
+	// one long frame from a newer peer; give it headroom instead.
+	scan.Buffer(make([]byte, 0, 4096), 1<<20)
+	return &Conn{rw: rw, scan: scan}
 }
 
 // Send writes one message.

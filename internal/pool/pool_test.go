@@ -21,16 +21,17 @@ import (
 )
 
 type fakeBackend struct {
-	t         *testing.T
-	guests    chan *guest.Session
-	taps      int
-	imagePath string
-	mu        sync.Mutex
-	overlays  int
-	jits      int
-	removed   []int64
-	removeErr error
-	seq       []string
+	t           *testing.T
+	guests      chan *guest.Session
+	taps        int
+	imagePath   string
+	mu          sync.Mutex
+	overlays    int
+	jits        int
+	removed     []int64
+	removeErr   error
+	removeCalls int
+	seq         []string
 }
 
 func (f *fakeBackend) GenerateJIT(ctx context.Context, name string, labels []string) (ghapi.JITResult, error) {
@@ -51,12 +52,19 @@ func (f *fakeBackend) jitCount() int {
 func (f *fakeBackend) RemoveRunner(ctx context.Context, id int64) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.removeCalls++
 	if f.removeErr != nil {
 		return f.removeErr
 	}
 	f.removed = append(f.removed, id)
 	f.seq = append(f.seq, "remove")
 	return nil
+}
+
+func (f *fakeBackend) removeAttempts() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.removeCalls
 }
 
 func (f *fakeBackend) removedIDs() []int64 {
@@ -318,8 +326,10 @@ func onlyVM(t *testing.T, m *Manager) *VM {
 }
 
 // warmVM boots one warm (min_idle) VM whose fake guest sends the boot-time
-// job_started and then keeps the session open, and hands back its pool entry.
-func warmVM(t *testing.T, backend *fakeBackend, m *Manager, jobGo chan struct{}) *VM {
+// job_started and then keeps the session open. It hands back the pool entry
+// and the guest side of the control channel (close it to simulate a lost
+// session).
+func warmVM(t *testing.T, backend *fakeBackend, m *Manager, jobGo chan struct{}) (*VM, net.Conn) {
 	t.Helper()
 	sess, peer := pipeSession(t)
 	backend.guests <- sess
@@ -349,7 +359,7 @@ func warmVM(t *testing.T, backend *fakeBackend, m *Manager, jobGo chan struct{})
 	if st := m.Status(); st.Idle != 1 {
 		t.Fatalf("warm VM did not become idle: %+v", st)
 	}
-	return onlyVM(t, m)
+	return onlyVM(t, m), peer
 }
 
 func TestRecycleDeregistersBeforeDestroy(t *testing.T) {
@@ -359,7 +369,7 @@ func TestRecycleDeregistersBeforeDestroy(t *testing.T) {
 	_ = cfg.Layout().Ensure()
 	backend := &fakeBackend{t: t, guests: make(chan *guest.Session, 1), imagePath: filepath.Join(t.TempDir(), "b.qcow2")}
 	m := New(cfg, slog.Default(), backend)
-	vm := warmVM(t, backend, m, nil)
+	vm, _ := warmVM(t, backend, m, nil)
 	m.mu.Lock()
 	vm.JITAt = time.Now().Add(-time.Hour)
 	m.mu.Unlock()
@@ -383,7 +393,7 @@ func TestRecycleSparesRunnerThatTookAJob(t *testing.T) {
 	_ = cfg.Layout().Ensure()
 	backend := &fakeBackend{t: t, guests: make(chan *guest.Session, 1), imagePath: filepath.Join(t.TempDir(), "b.qcow2")}
 	m := New(cfg, slog.Default(), backend)
-	vm := warmVM(t, backend, m, nil)
+	vm, _ := warmVM(t, backend, m, nil)
 	// GitHub gave the "idle" runner a job just before the recycle pass:
 	// DELETE answers 422 and the VM must survive.
 	backend.setRemoveErr(&ghapi.APIError{StatusCode: http.StatusUnprocessableEntity, Status: "422 Unprocessable Entity"})
@@ -408,7 +418,7 @@ func TestJobActiveMarksWarmVMBusyAndRecyclerSpares(t *testing.T) {
 	backend := &fakeBackend{t: t, guests: make(chan *guest.Session, 1), imagePath: filepath.Join(t.TempDir(), "b.qcow2")}
 	m := New(cfg, slog.Default(), backend)
 	jobGo := make(chan struct{})
-	vm := warmVM(t, backend, m, jobGo)
+	vm, _ := warmVM(t, backend, m, jobGo)
 	close(jobGo)
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
@@ -440,7 +450,7 @@ func TestJobTimeoutReapsHungBusyVM(t *testing.T) {
 	backend := &fakeBackend{t: t, guests: make(chan *guest.Session, 1), imagePath: filepath.Join(t.TempDir(), "b.qcow2")}
 	m := New(cfg, slog.Default(), backend)
 	jobGo := make(chan struct{})
-	vm := warmVM(t, backend, m, jobGo)
+	vm, _ := warmVM(t, backend, m, jobGo)
 	close(jobGo)
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
@@ -455,5 +465,88 @@ func TestJobTimeoutReapsHungBusyVM(t *testing.T) {
 	m.recycleExpired()
 	if n := len(m.ActiveNames()); n != 0 {
 		t.Fatalf("hung busy VM must be reaped after job_timeout, %d left", n)
+	}
+}
+
+// A dead control channel must not kill a VM whose runner GitHub still
+// reports busy: the runner is a separate guest process and its job keeps
+// running without the agent.
+func TestSessionLostWhileBusyKeepsVMUntilRunnerReleased(t *testing.T) {
+	cfg := config.Defaults()
+	cfg.DataDir = t.TempDir()
+	cfg.Pool.MinIdle = 1
+	_ = cfg.Layout().Ensure()
+	backend := &fakeBackend{t: t, guests: make(chan *guest.Session, 1), imagePath: filepath.Join(t.TempDir(), "b.qcow2")}
+	m := New(cfg, slog.Default(), backend)
+	jobGo := make(chan struct{})
+	vm, peer := warmVM(t, backend, m, jobGo)
+	close(jobGo)
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if m.Status().Busy == 1 {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if st := m.Status(); st.Busy != 1 {
+		t.Fatalf("VM not busy: %+v", st)
+	}
+	// GitHub still holds the runner busy: DELETE answers 422.
+	backend.setRemoveErr(&ghapi.APIError{StatusCode: http.StatusUnprocessableEntity, Status: "422 Unprocessable Entity"})
+	_ = peer.Close() // agent crash: control channel dies mid-job
+	deadline = time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if backend.removeAttempts() >= 1 {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	st := m.Status()
+	if len(m.ActiveNames()) != 1 || st.Busy != 1 {
+		t.Fatalf("busy VM must survive a lost control channel: %+v", st)
+	}
+	if seq := backend.sequence(); len(seq) != 0 {
+		t.Fatalf("nothing may be torn down while GitHub says busy, got %v", seq)
+	}
+	// The job ends: GitHub releases the registration (DELETE now succeeds)
+	// and the next recycle pass reaps the VM.
+	backend.setRemoveErr(nil)
+	m.recycleExpired()
+	if n := len(m.ActiveNames()); n != 0 {
+		t.Fatalf("VM must be reaped once GitHub releases its runner, %d left", n)
+	}
+	_ = vm
+}
+
+// A failed boot must not poison the job dedup set: polling has to be able
+// to spawn a fresh VM for the job that never got a runner.
+func TestBootFailureAllowsJobRetry(t *testing.T) {
+	cfg := config.Defaults()
+	cfg.DataDir = t.TempDir()
+	cfg.VM.BootTimeout.Duration = 30 * time.Millisecond
+	_ = cfg.Layout().Ensure()
+	backend := &fakeBackend{t: t, guests: make(chan *guest.Session, 1), imagePath: filepath.Join(t.TempDir(), "b.qcow2")}
+	m := New(cfg, slog.Default(), backend)
+	if err := m.HandleQueuedJob(context.Background(), ghapi.QueuedJob{ID: 7, Labels: []string{"gh-runnerd"}}); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if len(m.ActiveNames()) == 0 {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if n := len(m.ActiveNames()); n != 0 {
+		t.Fatalf("boot-timeout VM must be destroyed, %d left", n)
+	}
+	sess, peer := pipeSession(t)
+	backend.guests <- sess
+	go io.Copy(io.Discard, peer)
+	if err := m.HandleQueuedJob(context.Background(), ghapi.QueuedJob{ID: 7, Labels: []string{"gh-runnerd"}}); err != nil {
+		t.Fatal(err)
+	}
+	if backend.overlayCount() != 2 {
+		t.Fatalf("job must be retriable after a failed boot: %d overlays", backend.overlayCount())
 	}
 }
