@@ -2,7 +2,6 @@ package guest
 
 import (
 	"context"
-	"io"
 	"log/slog"
 	"net"
 	"strconv"
@@ -14,25 +13,38 @@ import (
 
 const DefaultPort = 5099
 
+// pendingTTL is how long an unclaimed guest session may wait for a VM to
+// pick it up. It comfortably exceeds vm.boot_timeout; anything older is a
+// connection nobody will ever claim (a probe, a stray dial from a job) and
+// holding it would only grow the pending list.
+const pendingTTL = 5 * time.Minute
+
 // Session is one connected guest.
 type Session struct {
 	Conn     *Conn
 	Hello    Message
 	RemoteIP string
-	raw      net.Conn
+	// RemoteCID is the guest's vsock context ID, 0 for TCP connections.
+	RemoteCID uint32
+	raw       net.Conn
+	arrivedAt time.Time
 }
 
 // Host accepts guest-agent connections over TCP (bridge) and vsock.
 type Host struct {
-	Log      *slog.Logger
-	sessions chan *Session
-	mu       sync.Mutex
-	lnTCP    net.Listener
-	lnVsock  net.Listener
+	Log     *slog.Logger
+	mu      sync.Mutex
+	pending []*Session
+	// wake is closed and replaced every time a session arrives, waking
+	// every NextFor waiter to rescan pending (broadcast semantics).
+	wake    chan struct{}
+	lnTCP   net.Listener
+	lnVsock net.Listener
+	closed  bool
 }
 
 func NewHost(log *slog.Logger) *Host {
-	return &Host{Log: log, sessions: make(chan *Session, 16)}
+	return &Host{Log: log, wake: make(chan struct{})}
 }
 
 // ListenTCP binds the guest control port on hostIP.
@@ -83,25 +95,76 @@ func (h *Host) handle(raw net.Conn) {
 		_ = raw.Close()
 		return
 	}
-	ip, _, _ := net.SplitHostPort(raw.RemoteAddr().String())
-	sess := &Session{Conn: gc, Hello: msg, RemoteIP: ip, raw: raw}
-	select {
-	case h.sessions <- sess:
-	case <-time.After(30 * time.Second):
-		_ = raw.Close()
+	sess := &Session{Conn: gc, Hello: msg, raw: raw}
+	// The session's identity is taken from the transport, never from the
+	// Hello payload: the source IP of the TCP connection on the isolated
+	// bridge, or the vsock context ID, both assigned by the host side.
+	switch addr := raw.RemoteAddr().(type) {
+	case *vsock.Addr:
+		sess.RemoteCID = addr.ContextID
+	default:
+		sess.RemoteIP, _, _ = net.SplitHostPort(raw.RemoteAddr().String())
 	}
+	h.admit(sess)
 }
 
-// Next waits for the next guest hello.
-func (h *Host) Next(ctx context.Context) (*Session, error) {
-	select {
-	case s := <-h.sessions:
-		if s == nil {
-			return nil, io.EOF
+// admit parks a session until the VM it belongs to claims it via NextFor.
+func (h *Host) admit(sess *Session) {
+	sess.arrivedAt = time.Now()
+	h.mu.Lock()
+	if h.closed {
+		h.mu.Unlock()
+		_ = sess.Close()
+		return
+	}
+	h.prunePendingLocked()
+	h.pending = append(h.pending, sess)
+	old := h.wake
+	h.wake = make(chan struct{})
+	h.mu.Unlock()
+	close(old)
+}
+
+// prunePendingLocked drops unclaimed sessions past pendingTTL. Callers hold mu.
+func (h *Host) prunePendingLocked() {
+	kept := h.pending[:0]
+	for _, s := range h.pending {
+		if time.Since(s.arrivedAt) > pendingTTL {
+			_ = s.Close()
+			continue
 		}
-		return s, nil
-	case <-ctx.Done():
-		return nil, ctx.Err()
+		kept = append(kept, s)
+	}
+	h.pending = kept
+}
+
+// NextFor waits for the guest session belonging to one specific VM,
+// identified by its bridge IP (TCP) or vsock CID. Sessions are matched on
+// transport identity, never on arrival order: when several VMs boot at
+// once, arrival order is effectively random, and handing a VM some other
+// guest's session would cross-wire JIT configs — the wrong QEMU would then
+// be destroyed when the crossed session ends, killing a runner mid-job.
+func (h *Host) NextFor(ctx context.Context, ip string, cid uint32) (*Session, error) {
+	for {
+		h.mu.Lock()
+		for i, s := range h.pending {
+			if (ip != "" && s.RemoteIP == ip) || (cid != 0 && s.RemoteCID == cid) {
+				h.pending = append(h.pending[:i], h.pending[i+1:]...)
+				h.mu.Unlock()
+				return s, nil
+			}
+		}
+		if h.closed {
+			h.mu.Unlock()
+			return nil, net.ErrClosed
+		}
+		ch := h.wake
+		h.mu.Unlock()
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-ch:
+		}
 	}
 }
 
@@ -143,12 +206,20 @@ func (s *Session) RecvLoop(fn func(Message)) error {
 
 func (h *Host) Close() error {
 	h.mu.Lock()
-	defer h.mu.Unlock()
+	h.closed = true
+	for _, s := range h.pending {
+		_ = s.Close()
+	}
+	h.pending = nil
+	old := h.wake
+	h.wake = make(chan struct{})
 	if h.lnTCP != nil {
 		_ = h.lnTCP.Close()
 	}
 	if h.lnVsock != nil {
 		_ = h.lnVsock.Close()
 	}
+	h.mu.Unlock()
+	close(old)
 	return nil
 }

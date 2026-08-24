@@ -1,10 +1,14 @@
 package guest
 
 import (
+	"bufio"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"os/exec"
+	"strings"
+	"sync"
 	"time"
 )
 
@@ -16,7 +20,10 @@ type AgentConfig struct {
 	Hostname    string
 	ConnectWait time.Duration
 	Dial        func() (net.Conn, error)
-	RunnerStart func(encoded string) (int, error)
+	// RunnerStart launches the actions runner with the JIT config and
+	// blocks until it exits. It must call onJobStart as soon as the runner
+	// reports that it picked up a workflow job.
+	RunnerStart func(encoded string, onJobStart func()) (int, error)
 }
 
 func defaults(cfg AgentConfig) AgentConfig {
@@ -42,13 +49,20 @@ func defaults(cfg AgentConfig) AgentConfig {
 		}
 	}
 	if cfg.RunnerStart == nil {
-		cfg.RunnerStart = func(encoded string) (int, error) {
+		cfg.RunnerStart = func(encoded string, onJobStart func()) (int, error) {
 			cmd := exec.Command("./run.sh", "--jitconfig", encoded)
 			cmd.Dir = cfg.RunnerDir
-			cmd.Stdout = os.Stdout
 			cmd.Stderr = os.Stderr
 			cmd.Env = append(os.Environ(), "RUNNER_ALLOW_RUNASROOT=1")
-			err := cmd.Run()
+			stdout, err := cmd.StdoutPipe()
+			if err != nil {
+				return 1, err
+			}
+			if err := cmd.Start(); err != nil {
+				return 1, err
+			}
+			watchRunnerOutput(stdout, os.Stdout, onJobStart)
+			err = cmd.Wait()
 			if err == nil {
 				return 0, nil
 			}
@@ -59,6 +73,24 @@ func defaults(cfg AgentConfig) AgentConfig {
 		}
 	}
 	return cfg
+}
+
+// watchRunnerOutput mirrors the runner's stdout to sink while watching for
+// the "Running job:" line the runner prints when it takes a workflow job.
+func watchRunnerOutput(r io.Reader, sink io.Writer, onJobStart func()) {
+	br := bufio.NewReader(r)
+	for {
+		line, err := br.ReadString('\n')
+		if line != "" {
+			_, _ = io.WriteString(sink, line)
+			if onJobStart != nil && strings.Contains(line, "Running job:") {
+				onJobStart()
+			}
+		}
+		if err != nil {
+			return
+		}
+	}
 }
 
 // RunAgent is the guest-side control loop.
@@ -90,7 +122,11 @@ func RunAgent(cfg AgentConfig) error {
 		return fmt.Errorf("expected jit message, got %s", msg.Type)
 	}
 	_ = c.Send(Message{Type: KindJobStarted})
-	code, runErr := cfg.RunnerStart(msg.Encoded)
+	var once sync.Once
+	onJobStart := func() {
+		once.Do(func() { _ = c.Send(Message{Type: KindJobActive}) })
+	}
+	code, runErr := cfg.RunnerStart(msg.Encoded, onJobStart)
 	_ = c.Send(Message{Type: KindJobFinished, ExitCode: code, Text: errText(runErr)})
 	return runErr
 }
