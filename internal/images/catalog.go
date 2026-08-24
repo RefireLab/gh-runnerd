@@ -204,21 +204,37 @@ func (c Catalog) Validate(name string) error {
 	return nil
 }
 
+// copyFile replaces dst atomically. Running VMs keep overlays backed by
+// the previous image file, and QEMU holds it open by inode: truncating dst
+// in place (a re-bake or re-import while runners are busy) would corrupt
+// every live guest's disk mid-job. Writing a temp file and renaming it
+// over dst leaves the old inode intact for them.
 func copyFile(src, dst string) error {
 	in, err := os.Open(src)
 	if err != nil {
 		return err
 	}
 	defer in.Close()
-	out, err := os.OpenFile(dst, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
+	tmp := dst + ".tmp"
+	out, err := os.OpenFile(tmp, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
 	if err != nil {
 		return err
 	}
-	defer out.Close()
 	if _, err := io.Copy(out, in); err != nil {
+		_ = out.Close()
+		_ = os.Remove(tmp)
 		return err
 	}
-	return out.Close()
+	if err := out.Sync(); err != nil {
+		_ = out.Close()
+		_ = os.Remove(tmp)
+		return err
+	}
+	if err := out.Close(); err != nil {
+		_ = os.Remove(tmp)
+		return err
+	}
+	return os.Rename(tmp, dst)
 }
 
 func hashFile(path string) (string, int64, error) {

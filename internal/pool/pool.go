@@ -43,11 +43,15 @@ type VM struct {
 	JITAt     time.Time `json:"jit_at"`
 	// BusyAt is when the VM was last known to take a workflow job; zero if
 	// it never did (or the guest image predates the job_active signal).
-	BusyAt   time.Time `json:"busy_at,omitempty"`
-	JobID    int64     `json:"job_id,omitempty"`
-	RunnerID int64     `json:"runner_id,omitempty"`
-	inst     *qemu.Instance
-	sess     *guest.Session
+	BusyAt time.Time `json:"busy_at,omitempty"`
+	// LostSession is when the control channel to the guest died without a
+	// job_finished. The runner may still be executing a job in there, so
+	// the VM is kept until GitHub releases its runner (or job_timeout).
+	LostSession time.Time `json:"lost_session,omitempty"`
+	JobID       int64     `json:"job_id,omitempty"`
+	RunnerID    int64     `json:"runner_id,omitempty"`
+	inst        *qemu.Instance
+	sess        *guest.Session
 }
 
 type Status struct {
@@ -193,31 +197,45 @@ func (m *Manager) recycleExpired() {
 	}
 	jobLimit := m.cfg.Pool.JobTimeout.Duration
 	m.mu.Lock()
-	var doomed, overdue []*VM
+	var doomed, overdue, lost []*VM
 	now := time.Now()
 	for _, vm := range m.vms {
-		switch vm.State {
-		case StateIdle:
-			if !vm.JITAt.IsZero() && now.Sub(vm.JITAt) >= limit {
-				doomed = append(doomed, vm)
-			}
-		case StateBusy:
-			// job_timeout backstop: a hung guest (frozen agent, kernel
-			// panic — nothing else detects it) must not hold a pool slot
-			// forever. Measured from BusyAt when the guest reported the
-			// job, else from JIT as an upper bound on the job's age.
+		if vm.State == StateDead {
+			continue
+		}
+		// job_timeout backstop: a hung guest (frozen agent, kernel panic —
+		// nothing else detects it) must not hold a pool slot forever.
+		// Measured from BusyAt when the guest reported the job, else from
+		// JIT as an upper bound on the job's age.
+		if vm.State == StateBusy {
 			since := vm.BusyAt
 			if since.IsZero() {
 				since = vm.JITAt
 			}
 			if jobLimit > 0 && !since.IsZero() && now.Sub(since) >= jobLimit {
 				overdue = append(overdue, vm)
+				continue
 			}
+		}
+		// A VM whose control channel died is reaped as soon as GitHub
+		// releases its runner: deregisterThenDestroy answers 422 while the
+		// job still runs, and succeeds (or 404s) once it finished.
+		if !vm.LostSession.IsZero() {
+			lost = append(lost, vm)
+			continue
+		}
+		if vm.State == StateIdle && !vm.JITAt.IsZero() && now.Sub(vm.JITAt) >= limit {
+			doomed = append(doomed, vm)
 		}
 	}
 	m.mu.Unlock()
 	for _, vm := range doomed {
 		m.recycleIdle(vm)
+	}
+	for _, vm := range lost {
+		if m.deregisterThenDestroy(vm, false) {
+			m.log.Info("reaped VM with lost control channel", "name", vm.Name)
+		}
 	}
 	for _, vm := range overdue {
 		m.log.Warn("destroying VM: job exceeded pool.job_timeout", "name", vm.Name, "timeout", jobLimit.String())
@@ -239,8 +257,30 @@ func (m *Manager) recycleIdle(vm *VM) {
 		m.mu.Unlock()
 		return
 	}
-	runnerID := vm.RunnerID
 	age := time.Since(vm.JITAt)
+	m.mu.Unlock()
+	if m.deregisterThenDestroy(vm, true) {
+		m.log.Info("recycled idle VM before JIT expiry", "name", vm.Name, "age", age.String())
+	}
+}
+
+// deregisterThenDestroy removes the VM's runner from GitHub and destroys
+// the VM only when GitHub confirms the runner was not busy. GitHub is the
+// sole authority: old guest images never send job_active, so pool state
+// alone can never prove a warm VM is idle. On 422 ("runner is busy") the
+// VM is marked Busy and kept; on any other deregistration error it is
+// kept untouched for the caller to retry later. requireIdle additionally
+// aborts the destroy when the VM stopped being idle while the DELETE was
+// in flight (a job_active raced in): the registration is gone either way,
+// but the VM is left to wind down on its own instead of being shot mid-job.
+// Reports whether the VM was destroyed.
+func (m *Manager) deregisterThenDestroy(vm *VM, requireIdle bool) bool {
+	m.mu.Lock()
+	if vm.State == StateDead {
+		m.mu.Unlock()
+		return false
+	}
+	runnerID := vm.RunnerID
 	m.mu.Unlock()
 	if runnerID != 0 {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -248,28 +288,69 @@ func (m *Manager) recycleIdle(vm *VM) {
 		if err := m.backend.RemoveRunner(ctx, runnerID); err != nil {
 			var apiErr *ghapi.APIError
 			if errors.As(err, &apiErr) && apiErr.StatusCode == http.StatusUnprocessableEntity {
-				// The runner picked up a job. Hands off: record what we
-				// learned so the recycler stops trying and job_timeout has
-				// a starting point. The VM is destroyed normally when the
-				// job ends (runner exits, RecvLoop returns).
-				m.log.Info("recycle skipped: runner took a job", "name", vm.Name, "runner_id", runnerID)
+				// The runner is executing a job. Hands off: record what we
+				// learned so job_timeout has a starting point. The VM is
+				// destroyed once the job ends (runner exits and GitHub
+				// releases the registration).
+				m.log.Info("deregister refused: runner is busy, VM kept", "name", vm.Name, "runner_id", runnerID)
 				m.mu.Lock()
-				if vm.State == StateIdle {
+				if vm.State != StateDead {
 					vm.State = StateBusy
-					vm.BusyAt = time.Now()
+					if vm.BusyAt.IsZero() {
+						vm.BusyAt = time.Now()
+					}
 				}
 				m.mu.Unlock()
-				return
+				return false
 			}
-			m.log.Warn("recycle deferred: deregister failed, will retry", "name", vm.Name, "runner_id", runnerID, "err", err)
-			return
+			m.log.Warn("deregister failed, VM kept for retry", "name", vm.Name, "runner_id", runnerID, "err", err)
+			return false
 		}
 		m.mu.Lock()
 		vm.RunnerID = 0
 		m.mu.Unlock()
 	}
-	m.log.Info("recycling idle VM before JIT expiry", "name", vm.Name, "age", age.String())
+	if requireIdle {
+		m.mu.Lock()
+		notIdle := vm.State != StateIdle
+		m.mu.Unlock()
+		if notIdle {
+			m.log.Warn("recycle aborted after deregistration: VM reported a job, leaving it to wind down", "name", vm.Name)
+			return false
+		}
+	}
 	m.destroy(vm)
+	return true
+}
+
+// sessionLost handles a broken control channel. A dead channel does not
+// mean a dead job: the runner is a separate guest process (a crashed or
+// OOM-killed agent leaves it running), so the VM is destroyed only once
+// GitHub confirms its runner is not busy. Until then the recycle pass
+// keeps retrying and pool.job_timeout is the final backstop.
+func (m *Manager) sessionLost(vm *VM, cause error) {
+	m.mu.Lock()
+	if vm.State == StateDead {
+		m.mu.Unlock()
+		return
+	}
+	vm.LostSession = time.Now()
+	m.mu.Unlock()
+	m.log.Warn("guest control channel lost", "vm", vm.Name, "err", cause)
+	if !m.deregisterThenDestroy(vm, false) {
+		m.log.Warn("VM kept after control-channel loss until GitHub releases its runner", "vm", vm.Name)
+	}
+}
+
+// forgetJob clears a job's dedup mark so polling can handle it again after
+// the VM meant for it never became a working runner.
+func (m *Manager) forgetJob(id int64) {
+	if id == 0 {
+		return
+	}
+	m.mu.Lock()
+	delete(m.seenJob, id)
+	m.mu.Unlock()
 }
 
 func (m *Manager) spawn(ctx context.Context, labels []string, jobID int64) (*VM, error) {
@@ -352,12 +433,14 @@ func (m *Manager) finishBoot(ctx context.Context, vm *VM, labels []string) {
 	if err != nil {
 		m.log.Error("guest agent did not connect", "vm", vm.Name, "err", err)
 		m.destroy(vm)
+		m.forgetJob(vm.JobID)
 		return
 	}
 	jit, err := m.backend.GenerateJIT(ctx, vm.Name, labels)
 	if err != nil {
 		m.log.Error("generate-jitconfig failed", "vm", vm.Name, "err", err)
 		m.destroy(vm)
+		m.forgetJob(vm.JobID)
 		return
 	}
 	m.mu.Lock()
@@ -366,6 +449,7 @@ func (m *Manager) finishBoot(ctx context.Context, vm *VM, labels []string) {
 	if err := sess.SendJIT(jit.Encoded); err != nil {
 		m.log.Error("send jit failed", "vm", vm.Name, "err", err)
 		m.destroy(vm)
+		m.forgetJob(vm.JobID)
 		return
 	}
 	m.mu.Lock()
@@ -380,7 +464,7 @@ func (m *Manager) finishBoot(ctx context.Context, vm *VM, labels []string) {
 	m.mu.Unlock()
 
 	go func() {
-		_ = sess.RecvLoop(func(msg guest.Message) {
+		err := sess.RecvLoop(func(msg guest.Message) {
 			if msg.Type == guest.KindJobStarted && vm.JobID != 0 {
 				m.mu.Lock()
 				vm.State = StateBusy
@@ -403,7 +487,12 @@ func (m *Manager) finishBoot(ctx context.Context, vm *VM, labels []string) {
 				m.log.Info("job finished", "vm", vm.Name, "exit", msg.ExitCode)
 			}
 		})
-		m.destroy(vm)
+		if err == nil {
+			// job_finished: the ephemeral runner exited after its one job.
+			m.destroy(vm)
+			return
+		}
+		m.sessionLost(vm, err)
 	}()
 }
 
@@ -446,13 +535,15 @@ func (m *Manager) destroy(vm *VM) {
 	vm.State = StateDead
 	runnerID := vm.RunnerID
 	vm.RunnerID = 0
+	sess := vm.sess
+	inst := vm.inst
 	m.mu.Unlock()
-	if vm.sess != nil {
-		_ = vm.sess.Shutdown()
-		_ = vm.sess.Close()
+	if sess != nil {
+		_ = sess.Shutdown()
+		_ = sess.Close()
 	}
-	if vm.inst != nil {
-		_ = vm.inst.Kill()
+	if inst != nil {
+		_ = inst.Kill()
 	}
 	m.backend.DeleteTAP(vm.TAP)
 	m.backend.UnregisterDHCP(vm.MAC)
