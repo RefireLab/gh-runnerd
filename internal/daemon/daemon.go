@@ -366,8 +366,8 @@ func (b *liveBackend) StartVM(ctx context.Context, spec qemu.Spec) (*qemu.Instan
 	return qemu.Start(ctx, spec)
 }
 
-func (b *liveBackend) WaitGuest(ctx context.Context) (*guest.Session, error) {
-	return b.d.host.Next(ctx)
+func (b *liveBackend) WaitGuest(ctx context.Context, ip string, cid uint32) (*guest.Session, error) {
+	return b.d.host.NextFor(ctx, ip, cid)
 }
 
 func (b *liveBackend) CreateTAP(bridge, tap string) error {

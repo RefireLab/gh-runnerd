@@ -2,9 +2,11 @@ package pool
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net"
+	"net/http"
 	"os"
 	"path/filepath"
 	"sync"
@@ -39,10 +41,13 @@ type VM struct {
 	Overlay   string    `json:"overlay"`
 	StartedAt time.Time `json:"started_at"`
 	JITAt     time.Time `json:"jit_at"`
-	JobID     int64     `json:"job_id,omitempty"`
-	RunnerID  int64     `json:"runner_id,omitempty"`
-	inst      *qemu.Instance
-	sess      *guest.Session
+	// BusyAt is when the VM was last known to take a workflow job; zero if
+	// it never did (or the guest image predates the job_active signal).
+	BusyAt   time.Time `json:"busy_at,omitempty"`
+	JobID    int64     `json:"job_id,omitempty"`
+	RunnerID int64     `json:"runner_id,omitempty"`
+	inst     *qemu.Instance
+	sess     *guest.Session
 }
 
 type Status struct {
@@ -58,7 +63,9 @@ type Backend interface {
 	GenerateJIT(ctx context.Context, name string, labels []string) (ghapi.JITResult, error)
 	RemoveRunner(ctx context.Context, id int64) error
 	StartVM(ctx context.Context, spec qemu.Spec) (*qemu.Instance, error)
-	WaitGuest(ctx context.Context) (*guest.Session, error)
+	// WaitGuest waits for the control session of one specific VM,
+	// identified by its bridge IP (TCP) or vsock CID.
+	WaitGuest(ctx context.Context, ip string, cid uint32) (*guest.Session, error)
 	CreateTAP(bridge, tap string) error
 	DeleteTAP(tap string) error
 	CreateOverlay(backing, overlay string, diskGB int) error
@@ -128,14 +135,31 @@ func (m *Manager) HandleQueuedJob(ctx context.Context, job ghapi.QueuedJob) erro
 		m.mu.Unlock()
 		return nil
 	}
-	m.seenJob[job.ID] = time.Now()
+	now := time.Now()
+	for id, at := range m.seenJob {
+		if now.Sub(at) > 24*time.Hour {
+			delete(m.seenJob, id)
+		}
+	}
+	m.seenJob[job.ID] = now
 	if m.liveCount() >= m.cfg.Pool.MaxConcurrent {
+		// Not an error: the job stays queued in GitHub and either lands on
+		// a warm runner or is retried by the next poll once a slot frees.
+		// The seen mark must not stick, or polling would skip the job
+		// forever.
+		delete(m.seenJob, job.ID)
 		m.mu.Unlock()
-		return fmt.Errorf("pool exhausted (%d max concurrent VMs)", m.cfg.Pool.MaxConcurrent)
+		m.log.Debug("job waits: pool at capacity", "job", job.ID, "max", m.cfg.Pool.MaxConcurrent)
+		return nil
 	}
 	m.mu.Unlock()
 	labels := githubutil.MergeLabels(m.cfg.Runner.Labels, job.Labels)
 	_, err := m.spawn(ctx, labels, job.ID)
+	if err != nil {
+		m.mu.Lock()
+		delete(m.seenJob, job.ID)
+		m.mu.Unlock()
+	}
 	return err
 }
 
@@ -167,19 +191,85 @@ func (m *Manager) recycleExpired() {
 	if limit <= 0 {
 		limit = 45 * time.Minute
 	}
+	jobLimit := m.cfg.Pool.JobTimeout.Duration
 	m.mu.Lock()
-	var doomed []*VM
+	var doomed, overdue []*VM
 	now := time.Now()
 	for _, vm := range m.vms {
-		if vm.State == StateIdle && now.Sub(vm.JITAt) >= limit {
-			doomed = append(doomed, vm)
+		switch vm.State {
+		case StateIdle:
+			if !vm.JITAt.IsZero() && now.Sub(vm.JITAt) >= limit {
+				doomed = append(doomed, vm)
+			}
+		case StateBusy:
+			// job_timeout backstop: a hung guest (frozen agent, kernel
+			// panic — nothing else detects it) must not hold a pool slot
+			// forever. Measured from BusyAt when the guest reported the
+			// job, else from JIT as an upper bound on the job's age.
+			since := vm.BusyAt
+			if since.IsZero() {
+				since = vm.JITAt
+			}
+			if jobLimit > 0 && !since.IsZero() && now.Sub(since) >= jobLimit {
+				overdue = append(overdue, vm)
+			}
 		}
 	}
 	m.mu.Unlock()
 	for _, vm := range doomed {
-		m.log.Info("recycling idle VM before JIT expiry", "name", vm.Name, "age", time.Since(vm.JITAt).String())
+		m.recycleIdle(vm)
+	}
+	for _, vm := range overdue {
+		m.log.Warn("destroying VM: job exceeded pool.job_timeout", "name", vm.Name, "timeout", jobLimit.String())
 		m.destroy(vm)
 	}
+}
+
+// recycleIdle tears down an idle VM, deregistering its runner from GitHub
+// FIRST. GitHub assigns queued jobs to idle JIT runners directly, without
+// telling the daemon, so "idle" here may be stale: the only authoritative
+// check is the deregistration itself — GitHub refuses to delete a runner
+// that is executing a job (422). Destroying the VM before deregistering
+// would take a just-assigned job down with it and leave a ghost
+// registration that GitHub fails ~10 minutes later with "runner lost
+// communication with the server" and empty logs.
+func (m *Manager) recycleIdle(vm *VM) {
+	m.mu.Lock()
+	if vm.State != StateIdle {
+		m.mu.Unlock()
+		return
+	}
+	runnerID := vm.RunnerID
+	age := time.Since(vm.JITAt)
+	m.mu.Unlock()
+	if runnerID != 0 {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		if err := m.backend.RemoveRunner(ctx, runnerID); err != nil {
+			var apiErr *ghapi.APIError
+			if errors.As(err, &apiErr) && apiErr.StatusCode == http.StatusUnprocessableEntity {
+				// The runner picked up a job. Hands off: record what we
+				// learned so the recycler stops trying and job_timeout has
+				// a starting point. The VM is destroyed normally when the
+				// job ends (runner exits, RecvLoop returns).
+				m.log.Info("recycle skipped: runner took a job", "name", vm.Name, "runner_id", runnerID)
+				m.mu.Lock()
+				if vm.State == StateIdle {
+					vm.State = StateBusy
+					vm.BusyAt = time.Now()
+				}
+				m.mu.Unlock()
+				return
+			}
+			m.log.Warn("recycle deferred: deregister failed, will retry", "name", vm.Name, "runner_id", runnerID, "err", err)
+			return
+		}
+		m.mu.Lock()
+		vm.RunnerID = 0
+		m.mu.Unlock()
+	}
+	m.log.Info("recycling idle VM before JIT expiry", "name", vm.Name, "age", age.String())
+	m.destroy(vm)
 }
 
 func (m *Manager) spawn(ctx context.Context, labels []string, jobID int64) (*VM, error) {
@@ -258,7 +348,7 @@ func (m *Manager) finishBoot(ctx context.Context, vm *VM, labels []string) {
 	}
 	cctx, cancel := context.WithTimeout(ctx, bootTimeout)
 	defer cancel()
-	sess, err := m.backend.WaitGuest(cctx)
+	sess, err := m.backend.WaitGuest(cctx, vm.IP, vm.CID)
 	if err != nil {
 		m.log.Error("guest agent did not connect", "vm", vm.Name, "err", err)
 		m.destroy(vm)
@@ -283,6 +373,7 @@ func (m *Manager) finishBoot(ctx context.Context, vm *VM, labels []string) {
 	vm.JITAt = time.Now()
 	if vm.JobID != 0 {
 		vm.State = StateBusy
+		vm.BusyAt = time.Now()
 	} else {
 		vm.State = StateIdle
 	}
@@ -293,6 +384,19 @@ func (m *Manager) finishBoot(ctx context.Context, vm *VM, labels []string) {
 			if msg.Type == guest.KindJobStarted && vm.JobID != 0 {
 				m.mu.Lock()
 				vm.State = StateBusy
+				m.mu.Unlock()
+			}
+			// job_active is the guest's authoritative "a workflow job is
+			// running here" signal — GitHub hands jobs to warm idle
+			// runners without telling the daemon.
+			if msg.Type == guest.KindJobActive {
+				m.mu.Lock()
+				if vm.State == StateIdle || vm.State == StateBooting {
+					vm.State = StateBusy
+				}
+				if vm.BusyAt.IsZero() {
+					vm.BusyAt = time.Now()
+				}
 				m.mu.Unlock()
 			}
 			if msg.Type == guest.KindJobFinished {
@@ -332,6 +436,13 @@ func (m *Manager) DestroyAll() {
 
 func (m *Manager) destroy(vm *VM) {
 	m.mu.Lock()
+	if vm.State == StateDead {
+		// Another goroutine is already tearing this VM down (RecvLoop exit
+		// racing the recycler or DestroyAll); doing it twice would race on
+		// cmd.Wait and double-free the network resources.
+		m.mu.Unlock()
+		return
+	}
 	vm.State = StateDead
 	runnerID := vm.RunnerID
 	vm.RunnerID = 0

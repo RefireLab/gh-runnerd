@@ -5,6 +5,7 @@ import (
 	"io"
 	"log/slog"
 	"net"
+	"net/http"
 	"os"
 	"path/filepath"
 	"sync"
@@ -23,11 +24,13 @@ type fakeBackend struct {
 	t         *testing.T
 	guests    chan *guest.Session
 	taps      int
-	overlays  int
 	imagePath string
 	mu        sync.Mutex
+	overlays  int
 	jits      int
 	removed   []int64
+	removeErr error
+	seq       []string
 }
 
 func (f *fakeBackend) GenerateJIT(ctx context.Context, name string, labels []string) (ghapi.JITResult, error) {
@@ -48,7 +51,11 @@ func (f *fakeBackend) jitCount() int {
 func (f *fakeBackend) RemoveRunner(ctx context.Context, id int64) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.removeErr != nil {
+		return f.removeErr
+	}
 	f.removed = append(f.removed, id)
+	f.seq = append(f.seq, "remove")
 	return nil
 }
 
@@ -62,7 +69,7 @@ func (f *fakeBackend) StartVM(ctx context.Context, spec qemu.Spec) (*qemu.Instan
 	return &qemu.Instance{Spec: spec}, nil
 }
 
-func (f *fakeBackend) WaitGuest(ctx context.Context) (*guest.Session, error) {
+func (f *fakeBackend) WaitGuest(ctx context.Context, ip string, cid uint32) (*guest.Session, error) {
 	select {
 	case s := <-f.guests:
 		return s, nil
@@ -72,13 +79,38 @@ func (f *fakeBackend) WaitGuest(ctx context.Context) (*guest.Session, error) {
 }
 
 func (f *fakeBackend) CreateTAP(bridge, tap string) error { f.taps++; return nil }
-func (f *fakeBackend) DeleteTAP(tap string) error         { return nil }
+func (f *fakeBackend) DeleteTAP(tap string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.seq = append(f.seq, "deltap")
+	return nil
+}
 func (f *fakeBackend) CreateOverlay(backing, overlay string, diskGB int) error {
+	f.mu.Lock()
 	f.overlays++
+	f.mu.Unlock()
 	if err := os.MkdirAll(filepath.Dir(overlay), 0o700); err != nil {
 		return err
 	}
 	return os.WriteFile(overlay, []byte("overlay"), 0o600)
+}
+
+func (f *fakeBackend) overlayCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.overlays
+}
+
+func (f *fakeBackend) sequence() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]string(nil), f.seq...)
+}
+
+func (f *fakeBackend) setRemoveErr(err error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.removeErr = err
 }
 func (f *fakeBackend) RegisterDHCP(lease netbridge.Lease) {}
 func (f *fakeBackend) UnregisterDHCP(mac string)          {}
@@ -239,7 +271,7 @@ func TestDestroyDeregistersRunner(t *testing.T) {
 	}
 }
 
-func TestPoolExhausted(t *testing.T) {
+func TestPoolExhaustedJobRetriedOnceCapacityFrees(t *testing.T) {
 	cfg := config.Defaults()
 	cfg.DataDir = t.TempDir()
 	cfg.Pool.MaxConcurrent = 1
@@ -252,7 +284,176 @@ func TestPoolExhausted(t *testing.T) {
 	if err := m.HandleQueuedJob(context.Background(), ghapi.QueuedJob{ID: 1, Labels: []string{"gh-runnerd"}}); err != nil {
 		t.Fatal(err)
 	}
-	if err := m.HandleQueuedJob(context.Background(), ghapi.QueuedJob{ID: 2, Labels: []string{"gh-runnerd"}}); err == nil {
-		t.Fatal("expected exhaustion")
+	// A full pool is not an error: the job stays queued in GitHub. But it
+	// must not be remembered as handled, or polling would skip it forever.
+	if err := m.HandleQueuedJob(context.Background(), ghapi.QueuedJob{ID: 2, Labels: []string{"gh-runnerd"}}); err != nil {
+		t.Fatalf("exhaustion must not error: %v", err)
+	}
+	if backend.overlayCount() != 1 {
+		t.Fatalf("job 2 must not spawn while pool is full: %d overlays", backend.overlayCount())
+	}
+	m.DestroyAll()
+	sess2, peer2 := pipeSession(t)
+	backend.guests <- sess2
+	go io.Copy(io.Discard, peer2)
+	if err := m.HandleQueuedJob(context.Background(), ghapi.QueuedJob{ID: 2, Labels: []string{"gh-runnerd"}}); err != nil {
+		t.Fatal(err)
+	}
+	if backend.overlayCount() != 2 {
+		t.Fatalf("job 2 must spawn once capacity freed: %d overlays", backend.overlayCount())
+	}
+}
+
+func onlyVM(t *testing.T, m *Manager) *VM {
+	t.Helper()
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if len(m.vms) != 1 {
+		t.Fatalf("want exactly 1 VM, have %d", len(m.vms))
+	}
+	for _, vm := range m.vms {
+		return vm
+	}
+	return nil
+}
+
+// warmVM boots one warm (min_idle) VM whose fake guest sends the boot-time
+// job_started and then keeps the session open, and hands back its pool entry.
+func warmVM(t *testing.T, backend *fakeBackend, m *Manager, jobGo chan struct{}) *VM {
+	t.Helper()
+	sess, peer := pipeSession(t)
+	backend.guests <- sess
+	go func() {
+		c := guest.NewConn(peer)
+		msg, err := c.Recv()
+		if err != nil || msg.Type != guest.KindJIT {
+			return
+		}
+		_ = c.Send(guest.Message{Type: guest.KindJobStarted})
+		if jobGo != nil {
+			<-jobGo
+			_ = c.Send(guest.Message{Type: guest.KindJobActive})
+		}
+		_, _ = io.Copy(io.Discard, peer)
+	}()
+	if err := m.MaintainIdle(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if m.Status().Idle == 1 {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if st := m.Status(); st.Idle != 1 {
+		t.Fatalf("warm VM did not become idle: %+v", st)
+	}
+	return onlyVM(t, m)
+}
+
+func TestRecycleDeregistersBeforeDestroy(t *testing.T) {
+	cfg := config.Defaults()
+	cfg.DataDir = t.TempDir()
+	cfg.Pool.MinIdle = 1
+	_ = cfg.Layout().Ensure()
+	backend := &fakeBackend{t: t, guests: make(chan *guest.Session, 1), imagePath: filepath.Join(t.TempDir(), "b.qcow2")}
+	m := New(cfg, slog.Default(), backend)
+	vm := warmVM(t, backend, m, nil)
+	m.mu.Lock()
+	vm.JITAt = time.Now().Add(-time.Hour)
+	m.mu.Unlock()
+	m.recycleExpired()
+	if got := backend.removedIDs(); len(got) != 1 || got[0] != 101 {
+		t.Fatalf("expected exactly one deregistration of runner 101, got %v", got)
+	}
+	if n := len(m.ActiveNames()); n != 0 {
+		t.Fatalf("VM must be destroyed after recycle, %d left", n)
+	}
+	seq := backend.sequence()
+	if len(seq) < 2 || seq[0] != "remove" || seq[1] != "deltap" {
+		t.Fatalf("runner must be deregistered BEFORE the VM is torn down, got %v", seq)
+	}
+}
+
+func TestRecycleSparesRunnerThatTookAJob(t *testing.T) {
+	cfg := config.Defaults()
+	cfg.DataDir = t.TempDir()
+	cfg.Pool.MinIdle = 1
+	_ = cfg.Layout().Ensure()
+	backend := &fakeBackend{t: t, guests: make(chan *guest.Session, 1), imagePath: filepath.Join(t.TempDir(), "b.qcow2")}
+	m := New(cfg, slog.Default(), backend)
+	vm := warmVM(t, backend, m, nil)
+	// GitHub gave the "idle" runner a job just before the recycle pass:
+	// DELETE answers 422 and the VM must survive.
+	backend.setRemoveErr(&ghapi.APIError{StatusCode: http.StatusUnprocessableEntity, Status: "422 Unprocessable Entity"})
+	m.mu.Lock()
+	vm.JITAt = time.Now().Add(-time.Hour)
+	m.mu.Unlock()
+	m.recycleExpired()
+	st := m.Status()
+	if len(m.ActiveNames()) != 1 || st.Busy != 1 || st.Idle != 0 {
+		t.Fatalf("busy runner's VM must survive the recycler and be marked busy: %+v", st)
+	}
+	if seq := backend.sequence(); len(seq) != 0 {
+		t.Fatalf("nothing may be torn down for a busy runner, got %v", seq)
+	}
+}
+
+func TestJobActiveMarksWarmVMBusyAndRecyclerSpares(t *testing.T) {
+	cfg := config.Defaults()
+	cfg.DataDir = t.TempDir()
+	cfg.Pool.MinIdle = 1
+	_ = cfg.Layout().Ensure()
+	backend := &fakeBackend{t: t, guests: make(chan *guest.Session, 1), imagePath: filepath.Join(t.TempDir(), "b.qcow2")}
+	m := New(cfg, slog.Default(), backend)
+	jobGo := make(chan struct{})
+	vm := warmVM(t, backend, m, jobGo)
+	close(jobGo)
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if m.Status().Busy == 1 {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if st := m.Status(); st.Busy != 1 || st.Idle != 0 {
+		t.Fatalf("job_active must flip a warm VM to busy: %+v", st)
+	}
+	m.mu.Lock()
+	vm.JITAt = time.Now().Add(-time.Hour)
+	m.mu.Unlock()
+	m.recycleExpired()
+	if len(m.ActiveNames()) != 1 {
+		t.Fatal("recycler must not touch a busy VM")
+	}
+	if got := backend.removedIDs(); len(got) != 0 {
+		t.Fatalf("recycler must not deregister a busy runner, got %v", got)
+	}
+}
+
+func TestJobTimeoutReapsHungBusyVM(t *testing.T) {
+	cfg := config.Defaults()
+	cfg.DataDir = t.TempDir()
+	cfg.Pool.MinIdle = 1
+	_ = cfg.Layout().Ensure()
+	backend := &fakeBackend{t: t, guests: make(chan *guest.Session, 1), imagePath: filepath.Join(t.TempDir(), "b.qcow2")}
+	m := New(cfg, slog.Default(), backend)
+	jobGo := make(chan struct{})
+	vm := warmVM(t, backend, m, jobGo)
+	close(jobGo)
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if m.Status().Busy == 1 {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	m.mu.Lock()
+	vm.BusyAt = time.Now().Add(-cfg.Pool.JobTimeout.Duration - time.Hour)
+	m.mu.Unlock()
+	m.recycleExpired()
+	if n := len(m.ActiveNames()); n != 0 {
+		t.Fatalf("hung busy VM must be reaped after job_timeout, %d left", n)
 	}
 }

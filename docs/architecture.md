@@ -57,6 +57,25 @@ registered runners are never touched either; for a manual purge (including
 runners a dead host still shows as Idle) there is
 `gh-runnerd runners cleanup`.
 
+## Warm VM recycling
+
+Warm (`pool.min_idle`) VMs are registered JIT runners, and GitHub assigns
+queued jobs to them directly — the daemon is never told, so the pool's
+"idle" is only a guess (the guest reports `job_active` when the runner
+takes a job, but only on images baked from newer templates). Before
+recycling an idle VM (default 45 minutes after JIT, inside the ~60 minute
+JIT window) the daemon therefore deregisters the runner first and destroys
+the VM only when GitHub confirms the delete; a busy runner answers 422,
+and the VM is marked busy and left alone until its job finishes. As a
+backstop, `pool.job_timeout` (default 6h) reaps a guest that hangs
+mid-job. Killing the VM first would produce the nastiest failure mode
+GitHub has: a job that dies with empty logs and is failed ~10 minutes
+later with "runner lost communication with the server".
+
+Each booting VM claims its control session by transport identity (bridge
+IP or vsock CID), never by connection order — concurrent boots would
+otherwise cross-wire sessions and destroy the wrong VM later.
+
 ## Job path
 
 1. GitHub App webhook `workflow_job` / `queued` (or poll fallback).

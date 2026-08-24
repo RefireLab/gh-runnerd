@@ -4,6 +4,7 @@ import (
 	"errors"
 	"net"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 )
@@ -19,10 +20,11 @@ func TestAgentReceivesJITAndReportsFinish(t *testing.T) {
 			Hostname:    "vm-1",
 			ConnectWait: time.Second,
 			Dial:        func() (net.Conn, error) { return g, nil },
-			RunnerStart: func(encoded string) (int, error) {
+			RunnerStart: func(encoded string, onJobStart func()) (int, error) {
 				if encoded != "jit-bytes" {
 					t.Errorf("encoded %q", encoded)
 				}
+				onJobStart()
 				return 0, nil
 			},
 		})
@@ -46,6 +48,13 @@ func TestAgentReceivesJITAndReportsFinish(t *testing.T) {
 	if started.Type != KindJobStarted {
 		t.Fatalf("%+v", started)
 	}
+	active, err := hc.Recv()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if active.Type != KindJobActive {
+		t.Fatalf("expected job_active, got %+v", active)
+	}
 	finished, err := hc.Recv()
 	if err != nil {
 		t.Fatal(err)
@@ -55,6 +64,20 @@ func TestAgentReceivesJITAndReportsFinish(t *testing.T) {
 	}
 	if err := <-done; err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestWatchRunnerOutputDetectsJobLine(t *testing.T) {
+	t.Parallel()
+	var sink strings.Builder
+	fired := 0
+	in := strings.NewReader("√ Connected to GitHub\n2026-08-24 16:27:01Z: Running job: deploy\nlog line\n")
+	watchRunnerOutput(in, &sink, func() { fired++ })
+	if fired != 1 {
+		t.Fatalf("onJobStart fired %d times", fired)
+	}
+	if !strings.Contains(sink.String(), "Running job: deploy") || !strings.Contains(sink.String(), "log line\n") {
+		t.Fatalf("output not mirrored: %q", sink.String())
 	}
 }
 

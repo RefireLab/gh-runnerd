@@ -12,10 +12,17 @@ import (
 type Kind string
 
 const (
-	KindHello       Kind = "hello"
-	KindJIT         Kind = "jit"
-	KindHeartbeat   Kind = "heartbeat"
-	KindJobStarted  Kind = "job_started"
+	KindHello     Kind = "hello"
+	KindJIT       Kind = "jit"
+	KindHeartbeat Kind = "heartbeat"
+	// KindJobStarted is sent when the runner PROCESS starts, right after
+	// the JIT config is received — not when a workflow job begins. The name
+	// is kept for wire compatibility with already-baked guest images.
+	KindJobStarted Kind = "job_started"
+	// KindJobActive is sent when the runner actually picks up a workflow
+	// job. Only newer guest agents send it; the host must treat its absence
+	// as "unknown", never as "idle".
+	KindJobActive   Kind = "job_active"
 	KindJobFinished Kind = "job_finished"
 	KindLog         Kind = "log"
 	KindShutdown    Kind = "shutdown"
