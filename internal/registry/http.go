@@ -287,28 +287,24 @@ func upstreamForHost(host string) string {
 	}
 }
 
+// fetchManifest returns the manifest exactly as the upstream registry serves
+// it for ref. A multi-platform index stays an index: resolving it to one
+// platform's image would answer a digest-pinned pull (image@sha256:<index>)
+// with a different digest, which Docker rejects ("unexpected commit digest").
+// The client asks for the child manifest it needs by digest afterwards.
 func (s *Server) fetchManifest(ctx context.Context, ref, authorization string) ([]byte, string, string, error) {
-	img, err := s.remoteImage(ctx, ref, authorization)
+	desc, err := s.remoteDescriptor(ctx, ref, authorization)
 	if err != nil {
 		return nil, "", "", err
 	}
-	raw, err := img.RawManifest()
-	if err != nil {
-		return nil, "", "", err
+	// Pull config + layers into the cache when unauthenticated and the
+	// manifest is a single image; an index carries no layers of its own.
+	if authorization == "" && desc.MediaType.IsImage() {
+		if img, err := desc.Image(); err == nil {
+			_ = s.cacheImageBlobs(img)
+		}
 	}
-	d, err := img.Digest()
-	if err != nil {
-		return nil, "", "", err
-	}
-	mt, err := img.MediaType()
-	if err != nil {
-		return nil, "", "", err
-	}
-	// Also pull config + layers into cache when unauthenticated, handled by caller of blobs.
-	if authorization == "" {
-		_ = s.cacheImageBlobs(img)
-	}
-	return raw, d.String(), string(mt), nil
+	return desc.Manifest, desc.Digest.String(), string(desc.MediaType), nil
 }
 
 func (s *Server) cacheImageBlobs(img v1.Image) error {
@@ -357,12 +353,12 @@ func (s *Server) fetchBlob(ctx context.Context, ref, authorization string) ([]by
 	return io.ReadAll(rc)
 }
 
-func (s *Server) remoteImage(ctx context.Context, ref, authorization string) (v1.Image, error) {
+func (s *Server) remoteDescriptor(ctx context.Context, ref, authorization string) (*remote.Descriptor, error) {
 	parsed, err := name.ParseReference(ref, name.WeakValidation)
 	if err != nil {
 		return nil, err
 	}
-	return remote.Image(parsed, s.remoteOpts(ctx, authorization, parsed.Context().RegistryStr())...)
+	return remote.Get(parsed, s.remoteOpts(ctx, authorization, parsed.Context().RegistryStr())...)
 }
 
 func (s *Server) remoteOpts(ctx context.Context, authorization, registry string) []remote.Option {

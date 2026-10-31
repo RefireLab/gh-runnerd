@@ -4,7 +4,7 @@ Templates are **Ubuntu only** (amd64 and arm64). Debian/Fedora templates are not
 
 Every image contains the gh-runnerd base:
 
-- official GitHub Actions Runner (pinned at bake time, default v2.336.0)
+- official GitHub Actions Runner (pinned at bake time, default v2.338.2)
 - Docker Engine + Compose plugin
 - qemu-guest-agent, gh-runnerd-guest
 - internal CA + registry `hosts.toml`

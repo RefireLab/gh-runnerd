@@ -7,7 +7,7 @@ import (
 
 // DefaultRunnerVersion is the pinned GitHub Actions runner release baked
 // into the golden image.
-const DefaultRunnerVersion = "2.336.0"
+const DefaultRunnerVersion = "2.338.2"
 
 // installScript is executed inside the bake VM from the mounted seed share.
 // It optionally provisions GitHub hosted-runner software first, then
