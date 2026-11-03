@@ -7,7 +7,7 @@ on:
 
 jobs:
   test:
-    runs-on: ubuntu-24.04
+    runs-on: self-hosted
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -21,3 +21,5 @@ jobs:
         with:
           name: gh-runnerd-linux
           path: dist/gh-runnerd*
+          # Binaries ship via Releases; this copy is only for a quick check.
+          retention-days: 1
